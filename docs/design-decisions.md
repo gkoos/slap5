@@ -16,6 +16,12 @@
 - **A double three or four-three is not a rule-based win.** It depends on the opponent's replies, so the search decides.
 
 ## Search
+- **The Zobrist hash lives in `Board`**, updated by `make` and `unmake` with one XOR, so the search does not need `Game`. Keys are generated at compile time from a fixed seed (splitmix64), so hashes are reproducible between runs. The hash covers stones only; the search adds the side to move.
+- **An interrupted iteration is never used.** The move always comes from a completed iteration (PentaZen uses partial results, Rapfi does not).
+- **Plain alpha-beta first.** PVS can be added later inside the move loop and compared in matches.
+- **Ordering uses the threat masks** (block a five, own and opposing open-four cells) but does not narrow candidates or change depth; that is left to the forced-move work.
+- **Transposition table: 32 MB, one slot per hash.** A deeper entry from the same search is not overwritten by a shallower one. A result from a deeper search can answer a shallower request, so with the table on the root score can differ from fixed-depth minimax; tests compare against minimax with the table off.
+- **Search tests.** The pruned search must equal plain minimax (same terminal rules, no ordering or table) at depth 1 to 3 on random positions. I checked that these tests fail for deliberate pruning bugs (searching only the first move; cutting off 150 points early); a cut-off 30 points early was not detected, because evaluations are multiples of 100.
 - **Only forced replies are free plies.** Attacking moves cost depth. Both PentaZen and Rapfi treat answering a four this way; neither makes the attacker's moves free.
 - **A leaf search for fours is included**, as in both engines, so a forcing sequence beyond the search depth is not hidden by the static evaluation.
 - **Free-ply cap is measured from the root** and the time check is the real bound. Results found under a cap are then slightly path-dependent in the transposition table; this is accepted and to be measured.

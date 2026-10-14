@@ -1,10 +1,12 @@
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+﻿#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 mod avx;
 pub mod bitboard;
+pub mod eval;
 pub mod game;
-pub mod mover;
 pub mod protocol;
+pub mod search;
 pub mod threats;
+pub mod zobrist;
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 pub type Words = avx::U256;
@@ -89,5 +91,112 @@ mod tests {
         a.unmake(1, 7, 7);
         assert_eq!(a.five_cells(1).count_ones(), 0);
         assert!(!a.wins(1));
+    }
+
+    fn candidates_match_brute_force<B: Bits>() {
+        let mut s = 0x7F4A_7C15_9E37_79B9u64;
+        let mut next = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        for _ in 0..300 {
+            let mut b = bitboard::Board::<B>::new();
+            let mut stones = Vec::new();
+            for _ in 0..1 + (next() % 6) as usize {
+                let (r, c) = ((next() % SIZE as u64) as usize, (next() % SIZE as u64) as usize);
+                if !stones.contains(&(r, c)) {
+                    b.make(stones.len() % 2, r, c);
+                    stones.push((r, c));
+                }
+            }
+            let mut mask = b.candidates();
+            let mut got = Vec::new();
+            while let Some(i) = mask.pop_lowest() {
+                got.push((i / bitboard::STRIDE, i % bitboard::STRIDE));
+            }
+            let mut want = Vec::new();
+            for r in 0..SIZE {
+                for c in 0..SIZE {
+                    let near = stones.iter().any(|&(sr, sc)| r.abs_diff(sr).max(c.abs_diff(sc)) <= 2);
+                    if near && !stones.contains(&(r, c)) {
+                        want.push((r, c));
+                    }
+                }
+            }
+            assert_eq!(got, want, "stones {stones:?}");
+        }
+    }
+
+    #[test]
+    fn candidates_match_brute_force_scalar() {
+        candidates_match_brute_force::<U64x4>();
+    }
+
+    #[test]
+    fn candidates_match_brute_force_default() {
+        candidates_match_brute_force::<crate::Words>();
+    }
+
+    #[test]
+    fn no_candidates_on_an_empty_board() {
+        assert!(Board::new().candidates().is_zero());
+    }
+
+    fn recomputed_hash<B: Bits>(b: &bitboard::Board<B>) -> u64 {
+        let mut h = 0;
+        for p in 0..2 {
+            for r in 0..SIZE {
+                for c in 0..SIZE {
+                    if b.stones[p].get(r * bitboard::STRIDE + c) {
+                        h ^= crate::zobrist::key(p, r * bitboard::STRIDE + c);
+                    }
+                }
+            }
+        }
+        h
+    }
+
+    fn hash_follows_make_and_unmake<B: Bits>() {
+        for seed in 1..200u64 {
+            let moves = random_moves(seed, 10 + (seed as usize % 40));
+            let mut b = bitboard::Board::<B>::new();
+            assert_eq!(b.hash(), 0);
+            for &(p, r, c) in &moves {
+                b.make(p, r, c);
+                assert_eq!(b.hash(), recomputed_hash(&b), "make, seed {seed}");
+            }
+            for &(p, r, c) in moves.iter().rev().step_by(2) {
+                b.unmake(p, r, c);
+                assert_eq!(b.hash(), recomputed_hash(&b), "unmake, seed {seed}");
+            }
+        }
+    }
+
+    #[test]
+    fn hash_follows_make_and_unmake_scalar() {
+        hash_follows_make_and_unmake::<U64x4>();
+    }
+
+    #[test]
+    fn hash_follows_make_and_unmake_default() {
+        hash_follows_make_and_unmake::<crate::Words>();
+    }
+
+    #[test]
+    fn hash_ignores_move_order_but_not_colour() {
+        let mut a = Board::new();
+        let mut b = Board::new();
+        a.make(0, 3, 3);
+        a.make(1, 4, 4);
+        b.make(1, 4, 4);
+        b.make(0, 3, 3);
+        assert_eq!(a.hash(), b.hash());
+
+        let mut swapped = Board::new();
+        swapped.make(1, 3, 3);
+        swapped.make(0, 4, 4);
+        assert_ne!(a.hash(), swapped.hash());
     }
 }

@@ -22,6 +22,10 @@ impl Game {
         &self.moves
     }
 
+    pub fn board(&self) -> &Board {
+        &self.board
+    }
+
     pub fn occupied(&self, x: usize, y: usize) -> bool {
         let i = y * crate::bitboard::STRIDE + x;
         self.board.stones[0].get(i) || self.board.stones[1].get(i)
@@ -53,6 +57,10 @@ impl Game {
         self.board.wins(player)
     }
 
+    pub fn hash(&self) -> u64 {
+        self.board.hash()
+    }
+
     pub fn is_full(&self) -> bool {
         self.moves.len() == SIZE * SIZE
     }
@@ -72,6 +80,19 @@ mod tests {
         assert!(g.undo(3, 4));
         assert!(!g.occupied(3, 4));
         assert!(!g.undo(3, 4));
+    }
+
+    #[test]
+    fn undo_restores_hash() {
+        let mut g = Game::new();
+        g.play(0, 3, 4).unwrap();
+        let before = g.hash();
+        g.play(1, 8, 8).unwrap();
+        g.play(0, 9, 9).unwrap();
+        g.undo(8, 8);
+        g.undo(9, 9);
+        assert_eq!(g.hash(), before);
+        assert_ne!(before, 0);
     }
 
     #[test]

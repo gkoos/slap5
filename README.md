@@ -1,6 +1,6 @@
 # high5
 
-A freestyle gomoku engine in Rust that speaks the Piskvork/Gomocup protocol. It currently plays legal games with a placeholder move chooser; the search is not written yet.
+A freestyle gomoku engine in Rust that speaks the Piskvork/Gomocup protocol. It plays with iterative-deepening alpha-beta; forced-move handling is not written yet (see `docs/algorithm.md`).
 
 ## Build and test
 
@@ -27,10 +27,22 @@ Set-ItemProperty $k -Name sirka -Value 15 -Type DWord
 
 Delete the key to restore the default (20×20). Batch mode (`piskvork.exe -p <engine1> <engine2>`) has no board-size option, so it uses this setting too.
 
+## Matches
+
+```
+scripts/match.ps1 -Opponent <engine.exe> [-Pairs 10] [-TimeTurnMs 1000]
+```
+
+Plays each of Piskvork's openings twice, once with each engine moving first, prints a win/loss/draw tally and writes the game records and pipe logs under `logs/`. In the same registry key, set `autoBegin` to 1 (otherwise Piskvork ignores openings in batch mode) and `openingRandomShift1` to 0 (so both games of a pair get the same opening). The script kills every running `pbrain-*` process after each game, so run one match at a time.
+
 ## Layout
 
 - `src/bitboard.rs`, `src/avx.rs`: board representation
+- `src/zobrist.rs`: hash keys
 - `src/threats.rs`: threat masks
-- `src/game.rs`, `src/protocol.rs`, `src/mover.rs`, `src/main.rs`: game state and Piskvork protocol
+- `src/eval.rs`: static evaluation
+- `src/search.rs`: the search
+- `src/game.rs`, `src/protocol.rs`, `src/main.rs`: game state and Piskvork protocol
+- `scripts/match.ps1`: plays matches against other engines
 - `docs/algorithm.md`: the algorithm and what is implemented
 - `docs/design-decisions.md`: why things are the way they are

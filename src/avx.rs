@@ -120,4 +120,17 @@ impl Bits for U256 {
     fn get(self, i: usize) -> bool {
         (self.words()[i / 64] >> (i % 64)) & 1 != 0
     }
+    #[inline(always)]
+    fn pop_lowest(&mut self) -> Option<usize> {
+        let mut w = self.words();
+        for i in 0..4 {
+            if w[i] != 0 {
+                let bit = w[i].trailing_zeros() as usize;
+                w[i] &= w[i] - 1;
+                *self = Self::from_words(w);
+                return Some(i * 64 + bit);
+            }
+        }
+        None
+    }
 }
