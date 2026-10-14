@@ -1,0 +1,19 @@
+﻿[package]
+name = "high5"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "threats"
+harness = false
+
+[[bin]]
+name = "pbrain-high5"
+path = "src/main.rs"
+
+
