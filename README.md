@@ -1,6 +1,6 @@
 # high5
 
-A freestyle gomoku engine in Rust that speaks the Piskvork/Gomocup protocol. It plays with iterative-deepening alpha-beta; forced-move handling is not written yet (see `docs/algorithm.md`).
+A freestyle gomoku engine in Rust that speaks the Piskvork/Gomocup protocol. It plays with iterative-deepening principal variation search (see `docs/algorithm.md` for what is implemented).
 
 ## Build and test
 
@@ -41,7 +41,7 @@ Plays each of Piskvork's openings twice, once with each engine moving first, pri
 cargo run --release --example suite [-- <ms per position>]
 ```
 
-Runs the engine on 21 positions taken from games it lost to Tito and PentaZen (`data/last_chance.txt`) and counts how often it picks a move that avoids a forced loss. It is a quick check (about 25 s) before spending an hour on matches. "Saving" means a forced-win prover found no forced win within its bound (at most 4 voluntary threat moves); it is not a proof of safety, and the prover is not in this repository. Baseline: 2/21 at 1000 ms.
+Runs the engine on 21 positions taken from games it lost to Tito and PentaZen (`data/last_chance.txt`) and counts how often it picks a move that avoids a forced loss. It is a quick check (about 25 s) before spending an hour on matches. "Saving" means a forced-win prover found no forced win within its bound (at most 4 voluntary threat moves); it is not a proof of safety, and the prover is not in this repository. With the default settings it picks a saving move in 18 of 21 positions at 1000 ms (depth reached 5 to 9); two of the 21 entries (`PentaZen-p00_opponent_first` and `Tito-p00_opponent_first`) are the same position. Earlier measurements: 3/21 at 1000 ms with everything off (`no-threes no-leaf no-selective`, mean depth 6.9), 13/21 with pruning and reductions on (depth 9.6), 19/21 with the free replies to open threes (depth 7.4), 19/21 with the leaf search too (limit 3, depth 5.8). `leaf=N` sets the leaf search limit, `no-tt` turns off the transposition table.
 
 ## Layout
 

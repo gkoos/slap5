@@ -16,4 +16,8 @@ harness = false
 name = "pbrain-high5"
 path = "src/main.rs"
 
+# The search tests are far too slow unoptimized (the AVX2 intrinsics are not inlined); debug assertions stay on.
+[profile.test]
+opt-level = 3
+
 

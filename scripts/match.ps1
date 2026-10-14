@@ -33,12 +33,14 @@ $rows = foreach ($i in 0..($Pairs - 1)) {
         if ($p.WaitForExit(($TimeMatchS * 2 + 120) * 1000)) { $code = $p.ExitCode } else { $p.Kill() }
         Get-Process -Name 'pbrain-*' -ErrorAction SilentlyContinue | Stop-Process -Force
 
-        # Exit codes: 1 first player won, 2 second player won, 3 draw. No game record means the game never ran.
-        $outcome = if (-not (Test-Path $psq) -or $code -notin 1, 2, 3) { 'error' }
-        elseif ($code -eq 3) { 'draw' }
+        # Exit codes: 1 first player won, 2 second player won, 3 draw or error. A draw needs a full board
+        # (225 moves in the game record); any other code 3 is an error, such as a timeout or a crash.
+        $moves = if (Test-Path $psq) { @(Get-Content $psq | Where-Object { $_ -match '^\d+,\d+,\d+$' }).Count } else { 0 }
+        $outcome = if ($moves -eq 0 -or $code -notin 1, 2, 3) { 'error' }
+        elseif ($code -eq 3) { if ($moves -eq 225) { 'draw' } else { 'error' } }
         elseif (($code -eq 1) -eq ($first -eq 'high5')) { 'win' }
         else { 'loss' }
-        $row = [pscustomobject]@{ Pair = $i; Opening = $i % $openings; High5First = ($first -eq 'high5'); ExitCode = $code; Outcome = $outcome }
+        $row = [pscustomobject]@{ Pair = $i; Opening = $i % $openings; High5First = ($first -eq 'high5'); ExitCode = $code; Moves = $moves; Outcome = $outcome }
         Write-Host ("pair {0} high5 {1}: {2}" -f $i, $(if ($row.High5First) { 'first ' } else { 'second' }), $outcome)
         $row
     }
