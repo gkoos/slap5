@@ -1,6 +1,6 @@
 //! Runs the engine on the positions in data/last_chance.txt and counts how often it picks a saving move.
 //! Usage: cargo run --release --example suite [-- <ms per position> [switch ...]]
-//! Switches: see `Config::apply` (no-tt, no-threes, no-leaf, leaf=N, no-selective).
+//! Switches: see `Config::apply` (no-tt, no-threes, no-leaf, leaf=N, no-selective, no-limit, no-reductions).
 
 use high5::Board;
 use high5::search::{Config, Limits, Searcher, Width};

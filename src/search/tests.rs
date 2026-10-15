@@ -29,7 +29,8 @@ fn plain(f: impl FnOnce(&mut Config)) -> Searcher {
     searcher_with(|c| {
         c.use_tt = false;
         c.free_three_replies = false;
-        c.leaf_depth = 0;
+        c.free_four_replies = false;
+        c.double_threat_ext = false;
         c.selective = false;
         f(c);
     })
@@ -39,7 +40,7 @@ type Rules = fn(&Board, usize, usize, u32) -> Option<i32>;
 
 // The engine's rules for positions decided without search.
 fn decided(b: &Board, side: usize, ply: usize, stones: u32) -> Option<i32> {
-    Threats::new(b, side).decided(ply, stones)
+    Threats::new(&b.shapes(), side).decided(ply, stones)
 }
 
 // Only the game's own end: a full board, or a five for the side to move.
@@ -150,15 +151,16 @@ fn minimax_free(b: &mut Board, side: usize, depth: i32, ply: usize, stones: u32,
     let forced = if !opp_five.is_zero() {
         Some(opp_five)
     } else if three_reply {
-        Some(b.open_four_block_cells(opp).or(b.four_cells(side)))
+        let mut counters = b.open_four_block_cells(opp).or(b.four_cells(side));
+        if cfg.counter_threes {
+            counters = counters.or(b.open_three_cells(side));
+        }
+        Some(counters)
     } else {
         None
     };
-    let free_ply = three_reply && ply < cfg.free_ply_limit;
+    let free_ply = three_reply && cfg.extend_three_replies && ply < cfg.free_ply_limit;
     if ply > 0 && depth <= 0 && !free_ply {
-        if cfg.leaf_depth > 0 && free {
-            return leaf_ref(b, side, cfg.leaf_depth, ply, stones);
-        }
         return eval::evaluate(b, side);
     }
     let child_depth = if free_ply { depth } else { depth - 1 };
@@ -173,70 +175,93 @@ fn minimax_free(b: &mut Board, side: usize, depth: i32, ply: usize, stones: u32,
     best
 }
 
-// Reference for the leaf search: no pruning. Stand pat or play any four; a forced block is free.
-fn leaf_ref(b: &mut Board, side: usize, qd: i32, ply: usize, stones: u32) -> i32 {
-    if let Some(s) = decided(b, side, ply, stones) {
-        return s;
-    }
-    let opp = 1 - side;
-    if let Some(c) = b.five_cells(opp).pop_lowest() {
-        b.make(side, c / STRIDE, c % STRIDE);
-        let s = -leaf_ref(b, opp, qd, ply + 1, stones + 1);
-        b.unmake(side, c / STRIDE, c % STRIDE);
-        return s;
-    }
-    let stand = eval::evaluate(b, side);
-    if qd <= 0 {
-        return stand;
-    }
-    let mut best = stand;
-    let mut cand = b.four_cells(side);
-    while let Some(i) = cand.pop_lowest() {
-        b.make(side, i / STRIDE, i % STRIDE);
-        best = best.max(-leaf_ref(b, opp, qd - 1, ply + 1, stones + 1));
-        b.unmake(side, i / STRIDE, i % STRIDE);
-    }
-    best
-}
+// Plain depth 2 reaches a position with two fives against the opponent, or an open four for us.
+
 
 // A low limit keeps the unpruned reference search affordable on dense positions.
 const TEST_FREE_LIMIT: usize = 5;
-const TEST_LEAF_DEPTH: i32 = 2;
 
 fn agrees_with_free_minimax(depth: i32, positions: usize, cfg: Config) -> (u64, u64) {
     let mut rng = Rng(0x7777_1234_ABCD_0001);
-    let (mut forced_nodes, mut leaf_nodes) = (0, 0);
+    let (mut forced_nodes, mut horizon_nodes) = (0, 0);
     for _ in 0..positions {
         let b = random_position(&mut rng, 8, 4);
         let r = searcher_with(|c| *c = cfg).search(&b, 0, limits(depth)).unwrap();
         forced_nodes += r.stats.forced_nodes;
-        leaf_nodes += r.stats.leaf_nodes;
+        horizon_nodes += r.stats.horizon_nodes;
         let mut copy = b;
         let expected = minimax_free(&mut copy, 0, r.depth, 0, b.stone_count(), r.depth > 1, &cfg);
         assert_eq!(r.score, expected, "depth {} {cfg:?}", r.depth);
     }
-    (forced_nodes, leaf_nodes)
+    (forced_nodes, horizon_nodes)
 }
 
 #[test]
-fn matches_minimax_with_free_plies_and_the_leaf_search() {
-    // Free-ply and leaf chains make the unpruned reference expensive, so the sample stays small.
+fn matches_minimax_with_free_plies() {
+    // Free-ply chains make the unpruned reference expensive, so the sample stays small. The reference
+    // models free replies to an open three, which is what this test exercises.
     let (depth, positions) = (2, 6);
-    let (mut forced, mut leaf_nodes) = (0, 0);
-    for (threes, leaf) in [(true, false), (false, true), (true, true)] {
+    let (mut forced, mut horizon) = (0, 0);
+    for (threes, ext) in [(true, true), (true, false), (false, false)] {
         let cfg = Config {
             use_tt: false,
             free_three_replies: threes,
+            extend_three_replies: ext,
+            free_four_replies: false,
+            double_threat_ext: false,
             free_ply_limit: TEST_FREE_LIMIT,
-            leaf_depth: if leaf { TEST_LEAF_DEPTH } else { 0 },
             selective: false,
+            ..Config::default()
         };
         let (f, l) = agrees_with_free_minimax(depth, positions, cfg);
         forced += f;
-        leaf_nodes += l;
+        horizon += l;
     }
+    assert!(horizon > 0, "no horizon node was reached");
     assert!(forced > 0, "no forced node was reached; the positions do not exercise the rule");
-    assert!(leaf_nodes > 0, "no leaf search ran");
+}
+
+// The examples and the suite reach the settings only through `Config::apply`, so the switches have to
+// be the switches.
+#[test]
+fn the_config_switches_do_what_they_say() {
+    let mut c = Config::default();
+    assert!(c.apply("no-threes"));
+    assert!(!c.free_three_replies && c.free_four_replies && c.extend_three_replies);
+    assert!(c.apply("no-three-ext"));
+    assert!(!c.extend_three_replies);
+    assert!(c.apply("cap=16"));
+    assert_eq!(c.free_ply_limit, 16);
+    assert!(c.apply("verify=3"));
+    assert_eq!(c.verify_ply_limit, 3);
+    assert!(!c.apply("verify=x"), "verify without a number is not a switch");
+    assert!(!c.apply("cap=x"), "cap without a number is not a switch");
+    assert!(!c.apply("nonsense"));
+    assert_eq!(c.free_ply_limit, 16, "a rejected switch must not change anything");
+}
+
+// A reported mate says whether the table-free check ran, which is the only way a log can tell a proven
+// mate from a claimed one (see `docs/engine-audit-followup.md`, finding 4).
+#[test]
+fn a_reported_mate_says_whether_it_was_proved() {
+    for (name, b) in [("chain of fours", chain_of_fours()), ("double three", double_three())] {
+        // The check is bounded in time, so the test gives it enough of it to finish proving a mate in 5.
+        let mut s = searcher_with(|c| c.verify_ms = 5_000);
+        let r = s.search(&b, 0, limits(2)).unwrap();
+        assert!(r.score >= MATE_BOUND, "{name}");
+        assert_eq!(r.mate_verified, Some(true), "{name}: a mate in 5 is short enough to prove without the table");
+        assert!(r.stats.verify_nodes > 0, "{name}: the check ran");
+    }
+    // Past `verify_ply_limit` the check cannot finish inside a turn, so the mate is reported unverified.
+    let mut s = searcher_with(|c| c.verify_ply_limit = 0);
+    let r = s.search(&double_three(), 0, limits(2)).unwrap();
+    assert!(r.score >= MATE_BOUND);
+    assert_eq!(r.mate_verified, Some(false));
+    assert_eq!(r.stats.verify_nodes, 0, "no check was attempted");
+    // With no mate there is nothing to verify.
+    let mut s = searcher();
+    let b = board(&[(0, 7, 7), (1, 7, 8), (0, 8, 8)]);
+    assert_eq!(s.search(&b, 0, limits(1)).unwrap().mate_verified, None);
 }
 
 // Two blocked threes cross at (10,8); (7,8) is a four that forces the block at (7,9) and
@@ -264,6 +289,23 @@ fn the_decided_positions_end_a_five_ply_win_at_depth_two() {
         assert_eq!(r.score, MATE - 5);
         if let Some(mv) = mv {
             assert_eq!((r.x, r.y), mv);
+        }
+    }
+}
+
+// The same two positions with the settings the engine actually plays with. `double_three` cannot be
+// won by fours alone: the winning move makes an open three, the answer to it is forced and free, and
+// the win only appears after that. `chain_of_fours` covers the four half. If threat handling breaks,
+// these fail even though every other test still passes.
+#[test]
+fn the_default_settings_prove_wins_that_need_an_open_three() {
+    let positions = [("chain of fours", chain_of_fours(), None), ("double three", double_three(), Some((7, 7)))];
+    for (name, b, mv) in positions {
+        let mut s = searcher();
+        let r = s.search(&b, 0, limits(2)).unwrap();
+        assert!(r.score >= MATE_BOUND, "{name}: expected a proven win, got {} at depth {}", r.score, r.depth);
+        if let Some(mv) = mv {
+            assert_eq!((r.x, r.y), mv, "{name}: wrong move");
         }
     }
 }
@@ -345,4 +387,42 @@ fn deadline_is_respected_and_the_aborted_iteration_is_discarded() {
 
     let fixed = searcher().search(&b, 0, limits(timed.depth)).unwrap();
     assert_eq!((timed.x, timed.y, timed.score), (fixed.x, fixed.y, fixed.score));
+}
+
+// A fail-low from a node that skipped moves must not be stored as a bound on the position. The guard
+// returns before the store, so its counter is the evidence that the path is reachable at all.
+#[test]
+fn a_fail_low_is_not_stored_when_moves_were_skipped() {
+    let mut rng = Rng(0x1234_ABCD_5678_EF01);
+    let mut skipped = 0;
+    for _ in 0..10 {
+        let b = random_position(&mut rng, 20, 7);
+        let r = searcher_with(|c| c.strict_bounds = true).search(&b, 0, limits(5)).unwrap();
+        skipped += r.stats.skipped_bounds;
+    }
+    assert!(skipped > 0, "the guard never fired; the sample does not exercise the move-count limit");
+}
+
+// A mate ends the iteration loop and decides the move, so it has to be true. The engine re-searches it
+// with the limit and the reductions off; this checks the result against an independent exact search.
+#[test]
+fn mates_are_confirmed_by_an_exact_search() {
+    let mut rng = Rng(0x5EED_0F1E_2D3C_4B5A);
+    let mut mates = 0;
+    for _ in 0..40 {
+        let b = random_position(&mut rng, 14, 6);
+        let r = searcher_with(|_| {}).search(&b, 0, limits(2)).unwrap();
+        if r.score.abs() < MATE_BOUND {
+            continue;
+        }
+        mates += 1;
+        let exact = searcher_with(|c| c.selective = false).search(&b, 0, limits(r.depth)).unwrap();
+        assert!(
+            exact.score.abs() >= MATE_BOUND && exact.score.signum() == r.score.signum(),
+            "reported {} but the exact search says {}",
+            r.score,
+            exact.score
+        );
+    }
+    assert!(mates > 0, "no mate was reached in the sample");
 }

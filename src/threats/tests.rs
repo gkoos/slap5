@@ -288,3 +288,168 @@ fn four_cells_include_blocked_fours() {
     let f = |b: &Board<Words>, p| b.four_cells(p);
     assert_eq!(set(&["OXXX.."], 3, 7, f), [(7, 7), (8, 7)]);
 }
+
+// Directions in the order of `DIRS` (bit 1, 16, 15, 17): right, down, down-left, down-right.
+const DIRD: [(i32, i32); 4] = [(1, 0), (0, 1), (-1, 1), (1, 1)];
+
+fn for_colour(g: &Grid, colour: u8) -> Grid {
+    let mut h = [[0u8; SIZE]; SIZE];
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            h[y][x] = if g[y][x] == 0 {
+                0
+            } else if g[y][x] == colour {
+                1
+            } else {
+                2
+            };
+        }
+    }
+    h
+}
+
+// The shape a stone at (x, y) creates along one direction, or None, with the class precedence:
+// five, open four, four, open three, blocked three, two. Defined from the board alone, without the
+// mask code, and compared against the per-direction class masks.
+fn oracle_class(g: &Grid, x: i32, y: i32, dx: i32, dy: i32) -> Option<usize> {
+    let h = placed(g, x, y);
+    let (back, fwd) = run_arms(&h, x, y, dx, dy);
+    let before = at(&h, x - (back + 1) * dx, y - (back + 1) * dy);
+    let after = at(&h, x + (fwd + 1) * dx, y + (fwd + 1) * dy);
+    let run = 1 + back + fwd;
+    if run >= 5 {
+        return Some(FIVE);
+    }
+    if run == 4 && before == Some(0) && after == Some(0) {
+        return Some(OPEN_FOUR);
+    }
+    // Five-cell windows through (x, y), on the placed board and on the original board.
+    let windows = |g: &Grid| -> Vec<Vec<Option<u8>>> {
+        (-4..=0)
+            .map(|start| (start..start + 5).map(|i| at(g, x + i * dx, y + i * dy)).collect())
+            .collect()
+    };
+    let on_board = |w: &Vec<Option<u8>>| w.iter().all(|c| *c == Some(0) || *c == Some(1));
+    let own = |w: &Vec<Option<u8>>| w.iter().filter(|c| **c == Some(1)).count();
+    // Four: four own and one empty after the placement, all five cells on board.
+    if windows(&h).iter().any(|w| on_board(w) && own(w) == 4) {
+        return Some(FOUR);
+    }
+    // Open three: an empty cell within four steps whose placement makes an open four through (x, y).
+    let makes_open_four = (-4..=4).filter(|&i| i != 0).any(|i| {
+        if at(&h, x + i * dx, y + i * dy) != Some(0) {
+            return false;
+        }
+        let (x2, y2) = (x + i * dx, y + i * dy);
+        let h2 = placed(&h, x2, y2);
+        open_four_run(&h2, x2, y2, dx, dy).is_some_and(|(b, f)| (-f..=b).contains(&i))
+    });
+    if makes_open_four {
+        return Some(OPEN_THREE);
+    }
+    // Blocked three and two: a five-cell window with no opponent and no off-board cell holding
+    // exactly two own stones (three) or one (two) on the original board.
+    if windows(g).iter().any(|w| on_board(w) && own(w) == 2) {
+        return Some(BLOCKED_THREE);
+    }
+    if windows(g).iter().any(|w| on_board(w) && own(w) == 1) {
+        return Some(TWO);
+    }
+    None
+}
+
+// Every empty cell must be in exactly the class the oracle gives, in every direction.
+fn compare_classes<B: Bits>(g: &Grid, seen: &mut [u32; SHAPES]) {
+    let shapes = board::<B>(g).shapes();
+    for player in 0..2 {
+        let own_grid = for_colour(g, if player == 0 { 1 } else { 2 });
+        for (k, &(dx, dy)) in DIRD.iter().enumerate() {
+            for y in 0..SIZE as i32 {
+                for x in 0..SIZE as i32 {
+                    if own_grid[y as usize][x as usize] != 0 {
+                        continue;
+                    }
+                    let want = oracle_class(&own_grid, x, y, dx, dy);
+                    let bit = y as usize * STRIDE + x as usize;
+                    for (class, mask) in shapes.ranked(player)[k].iter().enumerate() {
+                        assert_eq!(
+                            mask.get(bit),
+                            want == Some(class),
+                            "player {player} dir {k} class {class} at ({x},{y}) on {g:?}"
+                        );
+                    }
+                    if let Some(c) = want {
+                        seen[c] += 1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn classes_differential<B: Bits>() {
+    let mut rng = Rng(0x243F_6A88_85A3_08D3);
+    let mut seen = [0u32; SHAPES];
+    for _ in 0..600 {
+        compare_classes::<B>(&random_grid(&mut rng), &mut seen);
+    }
+    for (class, n) in seen.iter().enumerate() {
+        assert!(*n >= 100, "class {class} appeared {n} times; generator too weak");
+    }
+}
+
+#[test]
+fn scalar_words_classes_match_oracle() {
+    classes_differential::<U64x4>();
+}
+
+#[test]
+fn default_words_classes_match_oracle() {
+    classes_differential::<Words>();
+}
+
+#[test]
+fn classes_are_disjoint_within_a_direction() {
+    let mut rng = Rng(0x1319_8A2E_0370_7344);
+    for _ in 0..200 {
+        let g = random_grid(&mut rng);
+        let shapes = board::<Words>(&g).shapes();
+        for player in 0..2 {
+            for k in 0..4 {
+                let mut seen = Words::ZERO;
+                for class in 0..SHAPES {
+                    let m = shapes.ranked(player)[k][class];
+                    assert!(m.and(seen).is_zero(), "player {player} dir {k}: overlap on {g:?}");
+                    seen = seen.or(m);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_double_four_counts_twice() {
+    // Three own stones on each arm, the far end of each arm blocked by the opponent: playing the
+    // crossing point makes a four in the row and in the column.
+    let mut g = [[0u8; SIZE]; SIZE];
+    for x in 4..=6 {
+        g[7][x] = 1;
+    }
+    for y in 4..=6 {
+        g[y][7] = 1;
+    }
+    g[7][3] = 2;
+    g[3][7] = 2;
+    let bit = 7 * STRIDE + 7;
+    let shapes = board::<Words>(&g).shapes();
+    let dirs = |s: &Shapes<Words>| (0..4).filter(|&k| s.ranked(0)[k][FOUR].get(bit)).count();
+    assert_eq!(dirs(&shapes), 2, "the crossing point should make a four in two directions");
+
+    // One arm alone makes one four, so the count is what distinguishes the two positions.
+    let mut one = [[0u8; SIZE]; SIZE];
+    for x in 4..=6 {
+        one[7][x] = 1;
+    }
+    one[7][3] = 2;
+    assert_eq!(dirs(&board::<Words>(&one).shapes()), 1);
+}
