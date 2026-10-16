@@ -133,4 +133,9 @@ impl Bits for U256 {
         }
         None
     }
+    /// The same four words the vector holds, through the inherent accessor above.
+    #[inline(always)]
+    fn words(self) -> [u64; 4] {
+        U256::words(self)
+    }
 }

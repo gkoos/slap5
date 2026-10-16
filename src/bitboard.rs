@@ -20,6 +20,38 @@ pub trait Bits: Copy {
     fn get(self, i: usize) -> bool;
     /// Clears the lowest set bit and returns its index.
     fn pop_lowest(&mut self) -> Option<usize>;
+    /// The four backing words, lowest first. Both representations keep 256 bits in four `u64`s, so the
+    /// read-only iterator below can be built without knowing which one it is.
+    fn words(self) -> [u64; 4];
+    /// Iterates the set bits in ascending cell order, extracting the backing words once. Use this when the
+    /// mask is only read: `pop_lowest` clears one bit but rebuilds the whole vector to do it.
+    #[inline(always)]
+    fn bits(self) -> BitsIter {
+        BitsIter { words: self.words(), word: 0 }
+    }
+}
+
+/// The set bits of a mask in ascending cell order, with the backing words extracted once (see `Bits::bits`).
+pub struct BitsIter {
+    words: [u64; 4],
+    word: usize,
+}
+
+impl Iterator for BitsIter {
+    type Item = usize;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<usize> {
+        while self.word < 4 {
+            let w = self.words[self.word];
+            if w != 0 {
+                self.words[self.word] = w & (w - 1);
+                return Some(self.word * 64 + w.trailing_zeros() as usize);
+            }
+            self.word += 1;
+        }
+        None
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -112,6 +144,10 @@ impl Bits for U64x4 {
             }
         }
         None
+    }
+    #[inline(always)]
+    fn words(self) -> [u64; 4] {
+        self.0
     }
 }
 

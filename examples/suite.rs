@@ -1,4 +1,4 @@
-//! Runs the engine on the positions in data/last_chance.txt and counts how often it picks a saving move.
+//! Runs the engine on the positions in examples/last_chance.txt and counts how often it picks a saving move.
 //! Usage: cargo run --release --example suite [-- <ms per position> [switch ...]]
 //! Switches: see `Config::apply` (no-tt, no-threes, no-leaf, leaf=N, no-selective, no-limit, no-reductions).
 
@@ -25,7 +25,7 @@ fn main() {
     let mut saved = 0;
     let mut depths = Vec::new();
     let mut width = [[[[Width::default(); 9]; 2]; 2]; 2];
-    for line in include_str!("../data/last_chance.txt").lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
+    for line in include_str!("last_chance.txt").lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
         let mut parts = line.split_whitespace();
         let name = parts.next().unwrap();
         let (mut us, mut played, mut stones, mut saving) = (0, (0, 0), Vec::new(), Vec::new());

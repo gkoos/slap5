@@ -230,6 +230,16 @@ fn the_config_switches_do_what_they_say() {
     assert!(!c.free_three_replies && c.free_four_replies && c.extend_three_replies);
     assert!(c.apply("no-three-ext"));
     assert!(!c.extend_three_replies);
+    assert!(!c.lmr_table, "the table is off until it has been measured");
+    assert!(c.apply("lmr-table"));
+    assert!(c.lmr_table);
+    assert!(c.apply("no-lmr-table"));
+    assert!(!c.lmr_table);
+    assert!(!c.iir, "IIR is off until it has been measured");
+    assert!(c.apply("iir"));
+    assert!(c.iir);
+    assert!(c.apply("no-iir"));
+    assert!(!c.iir);
     assert!(c.apply("cap=16"));
     assert_eq!(c.free_ply_limit, 16);
     assert!(c.apply("verify=3"));
@@ -240,8 +250,62 @@ fn the_config_switches_do_what_they_say() {
     assert_eq!(c.free_ply_limit, 16, "a rejected switch must not change anything");
 }
 
+// The table is PentaZen's curve at our resolution: more reduction deeper in the move list and at greater
+// depth, the PV column one ply lower, and never more reduction than leaves the child one ply to search.
+// It is off unless `lmr-table` is on, so this does not describe the default.
+#[test]
+fn the_reduction_table_curves_and_leaves_a_ply() {
+    for pv in [false, true] {
+        for depth in 3..=12 {
+            let mut previous = 0;
+            for k in 3..=LMR_MAX_MOVES {
+                let r = late_move_reduction_table(depth, depth - 1, k, pv);
+                assert!(r >= previous, "not monotone: depth {depth}, move {k}");
+                assert!(r <= depth - 2, "below one ply: depth {depth}, move {k}, reduction {r}");
+                previous = r;
+            }
+        }
+        assert_eq!(late_move_reduction_table(2, 1, 10, pv), 0, "shallow nodes are not reduced");
+        assert_eq!(late_move_reduction_table(9, 8, 2, pv), 0, "the first moves are not reduced");
+    }
+    for depth in 3..=12 {
+        for k in 3..=LMR_MAX_MOVES {
+            let non_pv = late_move_reduction_table(depth, depth - 1, k, false);
+            let pv = late_move_reduction_table(depth, depth - 1, k, true);
+            assert!(pv <= non_pv && non_pv - pv <= 1, "depth {depth}, move {k}");
+        }
+    }
+    // A different curve from the flat formula it replaces, not the same thing under another name.
+    assert_ne!(late_move_reduction_table(8, 7, 12, false), super::late_move_reduction(8, 12, false));
+}
+
+// IIR trades a ply of child depth for ordering at nodes whose table probe gave no move. Forced nodes are
+// never reduced, so a chain of fours must reach its mate either way; a quiet position with the table off is
+// what makes the reduction fire, and the counter is the only way a log can see that it did.
+#[test]
+fn iir_is_counted_and_does_not_lose_a_mate() {
+    for (name, b) in [("chain of fours", chain_of_fours()), ("double three", double_three())] {
+        let mut s = searcher_with(|c| {
+            c.iir = true;
+            c.verify_ply_limit = 0;
+        });
+        let r = s.search(&b, 0, limits(4)).unwrap();
+        assert!(r.score >= MATE_BOUND, "{name}: the mate survives IIR");
+    }
+    let mut off = searcher_with(|c| c.use_tt = false);
+    let mut on = searcher_with(|c| {
+        c.use_tt = false;
+        c.iir = true;
+    });
+    let quiet = board(&[(0, 7, 7), (1, 7, 8), (0, 8, 8)]);
+    off.search(&quiet, 0, limits(5)).unwrap();
+    on.search(&quiet, 0, limits(5)).unwrap();
+    assert_eq!(off.stats.iir_nodes, 0, "off by default");
+    assert!(on.stats.iir_nodes > 0, "the reduction fired: {} nodes", on.stats.iir_nodes);
+}
+
 // A reported mate says whether the table-free check ran, which is the only way a log can tell a proven
-// mate from a claimed one (see `docs/engine-audit-followup.md`, finding 4).
+// mate from a claimed one (see `docs/design-decisions.md`).
 #[test]
 fn a_reported_mate_says_whether_it_was_proved() {
     for (name, b) in [("chain of fours", chain_of_fours()), ("double three", double_three())] {
