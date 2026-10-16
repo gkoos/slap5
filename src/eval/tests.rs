@@ -13,8 +13,13 @@ fn with(stones: &[(usize, usize, usize)]) -> B {
 }
 
 #[test]
-fn empty_board_is_zero() {
-    assert_eq!(evaluate(&B::new(), 0), 0);
+fn empty_board_scores_only_tempo() {
+    // The shape part of an empty board is zero by definition, so what is left is the side-to-move term -
+    // which is opposite for the two colours, and the reason this test no longer expects zero.
+    let black = evaluate(&B::new(), 0);
+    let white = evaluate(&B::new(), 1);
+    assert_eq!(black, -white, "{black} {white}");
+    assert_eq!(black, TEMPO, "{black}");
 }
 
 #[test]
