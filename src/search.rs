@@ -113,6 +113,12 @@ pub struct Config {
     /// shallower, so the move ordering it does not have is paid for in depth instead of in breadth.
     /// **Off by default** until it has been measured.
     pub iir: bool,
+    /// Null-move pruning (`null-move`/`no-null-move`): with no five threat against us, pass the move and
+    /// search shallower; a score still above beta cuts the node. **Off by default**: item 2 of
+    /// `docs/roadmap.md`.
+    pub null_move: bool,
+    /// Plies taken off the null-move search, on top of the one ply the pass itself costs.
+    pub null_reduction: i32,
 }
 
 impl Default for Config {
@@ -135,6 +141,8 @@ impl Default for Config {
             reductions: true,
             lmr_table: false,
             iir: false,
+            null_move: true,
+            null_reduction: 2,
         }
     }
 }
@@ -188,6 +196,8 @@ impl Config {
             "no-lmr-table" => self.lmr_table = false,
             "iir" => self.iir = true,
             "no-iir" => self.iir = false,
+            "null-move" => self.null_move = true,
+            "no-null-move" => self.null_move = false,
             _ => return false,
         }
         true
@@ -212,6 +222,9 @@ pub struct Stats {
     pub skipped_bounds: u64,
     /// Nodes that were searched one ply shallower because the table had no move for them (see `Config::iir`).
     pub iir_nodes: u64,
+    /// Nodes where the null-move pass was tried, and how many of them cut (see `Config::null_move`).
+    pub null_nodes: u64,
+    pub null_cutoffs: u64,
     /// Beta cutoffs in the main search, and how many came from the first move tried.
     pub cutoffs: u64,
     pub first_move_cutoffs: u64,
@@ -261,6 +274,9 @@ pub struct Searcher {
     plain_iteration: bool,
     stopped: bool,
     deadline: Instant,
+    /// How many null moves are on the current path. A pass is only tried when there are none, so the search
+    /// cannot be built out of free moves.
+    nulls: u32,
     root_move: u8,
     root_hint: u8,
     stats: Stats,
@@ -498,6 +514,7 @@ impl Searcher {
             plain_iteration: true,
             stopped: false,
             deadline: Instant::now(),
+        nulls: 0,
             root_move: NO_MOVE,
             root_hint: NO_MOVE,
             stats: Stats::default(),
@@ -819,7 +836,7 @@ impl Searcher {
         // exactly the conditions here. A table cutoff, a forced node, the root and a search with both rules
         // off never compute it; nothing writes to it, so one computation still serves every reader.
         let static_eval = if !root && self.config.selective && !forced
-            && (self.config.futility || self.config.razor)
+            && (self.config.futility || self.config.razor || self.config.null_move)
         {
             eval::evaluate_shapes(&shapes, side)
         } else {
@@ -832,6 +849,28 @@ impl Searcher {
         let tactical = !(t.opp_five.is_zero() && t.opp_open4.is_zero() && t.own_open4.is_zero());
 
         let null_window = beta - alpha == 1;
+
+        // Null-move pruning (switch `null-move`): hand the opponent a free move and search shallower. If the
+        // score is still above beta, the position is good enough to cut. The guards are what make the pass
+        // legal in effect: the opponent must have no five threat (`opp_five` is the cells where they complete
+        // five, i.e. the fours they hold), the node must not be forced, no other pass may be on the path, the
+        // reduction must leave a real search, and the static score must already be above beta - passing from
+        // a worse position is the classic way this mechanism misses the opponent's win.
+        if self.config.null_move && !root && !forced && self.nulls == 0 && depth >= 4 && t.opp_five.is_zero()
+            && static_eval >= beta
+        {
+            self.stats.null_nodes += 1;
+            self.nulls += 1;
+            let score = -self.node(b, opp, depth - 1 - self.config.null_reduction, -beta, -beta + 1, ply + 1, stones);
+            self.nulls -= 1;
+            if self.stopped {
+                return 0;
+            }
+            if score >= beta {
+                self.stats.null_cutoffs += 1;
+                return score;
+            }
+        }
 
         // Reverse futility: the static score is already above beta by a margin, so the node returns it.
         // `static_eval < MATE_BOUND` is PentaZen's guard against returning an unproven win.

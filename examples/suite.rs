@@ -69,7 +69,7 @@ fn main() {
             w.candidates += s.candidates;
             w.searched += s.searched;
         }
-        println!("{name:<32} depth {} -> ({},{}) {}  {}  time {}ms", r.depth, r.x, r.y, if ok { "saving" } else if (r.x, r.y) == played { "same losing move as in the game" } else { "not saving" }, r.stats, r.elapsed.as_millis());
+        println!("{name:<32} depth {} -> ({},{}) {} score {} mate {:?}  {}  time {}ms", r.depth, r.x, r.y, if ok { "saving" } else if (r.x, r.y) == played { "same losing move as in the game" } else { "not saving" }, r.score, r.mate_verified, r.stats, r.elapsed.as_millis());
     }
     println!("\n{saved}/{total} saving moves at {ms} ms per position (depths {}..{}), {config:?}", depths.iter().min().unwrap(), depths.iter().max().unwrap());
 

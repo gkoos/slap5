@@ -240,6 +240,11 @@ fn the_config_switches_do_what_they_say() {
     assert!(c.iir);
     assert!(c.apply("no-iir"));
     assert!(!c.iir);
+    assert!(c.null_move, "null-move pruning is on by default since 16 October 2026");
+    assert!(c.apply("no-null-move"));
+    assert!(!c.null_move);
+    assert!(c.apply("null-move"));
+    assert!(c.null_move);
     assert!(c.apply("cap=16"));
     assert_eq!(c.free_ply_limit, 16);
     assert!(c.apply("verify=3"));
@@ -302,6 +307,61 @@ fn iir_is_counted_and_does_not_lose_a_mate() {
     on.search(&quiet, 0, limits(5)).unwrap();
     assert_eq!(off.stats.iir_nodes, 0, "off by default");
     assert!(on.stats.iir_nodes > 0, "the reduction fired: {} nodes", on.stats.iir_nodes);
+}
+
+// Null-move pruning must not lose a mate that the same search finds without it, and it has to fire somewhere;
+// the counter is the only way a log can see the pass being tried.
+#[test]
+fn null_move_keeps_the_mates_and_is_counted() {
+    for (name, b) in [("chain of fours", chain_of_fours()), ("double three", double_three())] {
+        let mut s = searcher_with(|c| {
+            c.null_move = true;
+            c.verify_ply_limit = 0;
+        });
+        let r = s.search(&b, 0, limits(4)).unwrap();
+        assert!(r.score >= MATE_BOUND, "{name}: the mate survives null-move pruning");
+    }
+    let quiet = board(&[(0, 7, 7), (1, 7, 8), (0, 8, 8), (1, 8, 7)]);
+    let mut off = searcher_with(|c| c.null_move = false);
+    let mut on = searcher_with(|c| {
+        c.null_move = true;
+        c.verify_ply_limit = 0;
+    });
+    off.search(&quiet, 0, limits(5)).unwrap();
+    on.search(&quiet, 0, limits(5)).unwrap();
+    assert_eq!(off.stats.null_nodes, 0, "off by default");
+    assert!(on.stats.null_nodes > 0, "the pass was tried: {} nodes", on.stats.null_nodes);
+}
+
+// What null-move pruning saves and what it costs, at fixed depth with the mate check off so nothing depends
+// on the clock: nodes with the pass off against on, plus how often it was tried and how often it cut. The cut
+// rate is the number that decides this mechanism: a pass that does not cut still searched a shallower tree,
+// so a modest rate can already pay. Run with `-- --nocapture` to read the table.
+#[test]
+fn null_move_saves_subtrees_or_only_costs_nodes() {
+    let positions = [
+        ("chain of fours", chain_of_fours()),
+        ("double three", double_three()),
+        ("quiet a", board(&[(0, 7, 7), (1, 7, 8), (0, 8, 8)])),
+        ("quiet b", board(&[(0, 7, 7), (1, 8, 8), (0, 7, 9), (1, 6, 8)])),
+        ("midgame", board(&[(0, 7, 7), (1, 7, 8), (0, 8, 8), (1, 6, 8), (0, 8, 7), (1, 9, 8)])),
+    ];
+    for (name, b) in positions {
+        let run = |null_move: bool| {
+            let mut s = searcher_with(|c| {
+                c.null_move = null_move;
+                c.verify_ply_limit = 0;
+            });
+            s.search(&b, 0, limits(6)).unwrap();
+            (s.stats.nodes, s.stats.null_nodes, s.stats.null_cutoffs)
+        };
+        let (off, _, _) = run(false);
+        let (on, tried, cut) = run(true);
+        println!(
+            "{name:<16} nodes off {off:>9} on {on:>9} saved {:>6.1}%  passes {tried:>6} cuts {cut:>6}",
+            (off as f64 - on as f64) * 100.0 / off as f64
+        );
+    }
 }
 
 // A reported mate says whether the table-free check ran, which is the only way a log can tell a proven
