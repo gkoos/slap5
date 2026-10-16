@@ -57,4 +57,5 @@ The suite is 20 unique tactical positions from earlier losses, labelled by a pro
 - `examples/suite.rs`, `examples/last_chance.txt`: position suite
 - `docs/algorithm.md`: the algorithm and what is implemented
 - `docs/design-decisions.md`: why things are the way they are
+- `docs/roadmap.md`: the improvement queue and the measurement rules
 

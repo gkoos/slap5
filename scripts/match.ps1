@@ -46,6 +46,8 @@ $dirty = @(git -C $repo status --porcelain 2>$null).Count
     "started: $(Get-Date -Format s)"
 ) | Set-Content (Join-Path $run 'run-info.txt')
 
+# Running tally, printed after every game so a long block can be watched while it runs.
+$seen = @{ win = 0; loss = 0; draw = 0; truncated = 0; error = 0 }
 $rows = foreach ($i in 0..($Pairs - 1)) {
     foreach ($first in 'high5', 'opponent') {
         $a, $b = if ($first -eq 'high5') { $engine, $opponent } else { $opponent, $engine }
@@ -68,6 +70,9 @@ $rows = foreach ($i in 0..($Pairs - 1)) {
         else { 'loss' }
         $row = [pscustomobject]@{ Pair = $i; Opening = (($i + $OpeningOffset) % $openings); High5First = ($first -eq 'high5'); ExitCode = $code; Moves = $moves; Outcome = $outcome }
         Write-Host ("pair {0} high5 {1}: {2}" -f $i, $(if ($row.High5First) { 'first ' } else { 'second' }), $outcome)
+        $seen[$outcome] += 1
+        $played = ($seen.Values | Measure-Object -Sum).Sum
+        Write-Host ("  after {0,2} games: {1,2}W {2,2}L {3}D {4}T {5}E" -f $played, $seen.win, $seen.loss, $seen.draw, $seen.truncated, $seen.error)
         $row
     }
 }
