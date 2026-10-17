@@ -14,6 +14,7 @@ export function createView({
   setHumanPlayer,
   setDifficulty,
   forceComputerMove,
+  version = 'dev',
 }) {
   function createGameUI() {
     const { board, currentPlayer, humanPlayer, aiDifficulty, gameInProgress } =
@@ -24,7 +25,7 @@ export function createView({
     document.querySelector('#app').innerHTML = `
     <div class="game-container">
       <h1>Gomoku</h1>
-      <div><i>slap5-v0.1.0</i> WASM Port</div>
+      <div><i>slap5-v${version}</i> WASM Port</div>
       <div class="github-link"><a href="https://github.com/gkoos/slap5" target="_blank">GitHub</a></div>
       <div class="player-selector">
         ${

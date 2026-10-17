@@ -14,6 +14,7 @@ export function createGameController({
   clearTimeout = globalThis.clearTimeout,
   alert = globalThis.alert,
   reportError = console.error,
+  version = 'dev',
 }) {
   // Game state
 
@@ -398,6 +399,7 @@ export function createGameController({
     setHumanPlayer,
     setDifficulty,
     forceComputerMove,
+    version,
   });
   const {
     createGameUI,
