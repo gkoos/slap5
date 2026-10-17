@@ -1,5 +1,7 @@
 # slap5
 
+**Play online: <https://gaborkoos.com/slap5/>**
+
 A freestyle gomoku engine in Rust that speaks the Piskvork/Gomocup protocol. It plays with iterative-deepening principal variation search (see `docs/algorithm.md` for what is implemented). The same engine also runs in the browser, as a WebAssembly build behind a gomoku page ([Web demo](#web-demo)).
 
 ## Build and test
@@ -18,7 +20,7 @@ On x86-64 the build uses `target-cpu=native` (see `.cargo/config.toml`), which s
 
 ## Web demo
 
-`web/` is the browser front end: the gomoku page that used to run a JavaScript opponent, with this engine compiled to wasm32 behind it instead. `.github/workflows/pages.yml` tests it, builds it and publishes it to GitHub Pages (`https://<owner>.github.io/slap5/` - a project page, so the built asset URLs are prefixed with the repository's name).
+`web/` is the browser front end: the gomoku page that used to run a JavaScript opponent, with this engine compiled to wasm32 behind it instead. It is live at **<https://gaborkoos.com/slap5/>**, and `.github/workflows/pages.yml` tests, builds and publishes it there: the account's user site owns the custom domain, so a project site of that account is served under `/<repo>/`, which is why the workflow sets `VITE_BASE: /slap5/` (and `https://gkoos.github.io/slap5/` redirects to it).
 
 ```
 cd web

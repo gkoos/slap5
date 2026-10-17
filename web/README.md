@@ -69,5 +69,7 @@ puts it on the crossing.
 ## Deployment
 
 `.github/workflows/pages.yml` runs `cargo test`, `npm test` and `npm run build`, then publishes `dist/` to
-GitHub Pages. A project page is served from `/<repo>/`, so the workflow sets `VITE_BASE` (and
-`vite.config.js` defaults to `'./'`, which also works for a user page or a custom domain).
+GitHub Pages. The site is live at **<https://gaborkoos.com/slap5/>** (`https://gkoos.github.io/slap5/`
+redirects there). The account's user site owns the custom domain, so a project site of that account is served
+from `/<repo>/`: that is why the workflow sets `VITE_BASE: /slap5/` (`vite.config.js` defaults to `'./'`,
+which would also work for a user page or a subdomain).
