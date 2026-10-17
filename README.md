@@ -2,7 +2,9 @@
 
 **Play online: <https://gaborkoos.com/slap5/>**
 
-Slap5 is a roughly 1500-Elo freestyle Gomoku (five-in-a-row) engine written in Rust. It uses principal variation search, tactical threat analysis and selective pruning, and runs both natively and in your browser through WebAssembly. Play against it online or challenge it through the Gomocup protocol.
+![Slap5 screenshot of the web demo](screenshot.png)
+
+Slap5 is a roughly 1500-Elo freestyle Gomoku (five-in-a-row) engine written in Rust. It uses principal variation search, tactical threat analysis and selective pruning, and runs both natively and in your browser through WebAssembly. Play against it online or challenge it through the [Gomocup](http://www.gomocup.org/) protocol in [piskvork](https://github.com/plastovicka/Piskvork).
 
 ## Build and test
 
