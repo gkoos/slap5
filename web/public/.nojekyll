@@ -1,0 +1,3 @@
+# GitHub Pages serves the build artifact as it is; this keeps a branch-based deploy (the fallback if the
+# workflow is ever replaced by "deploy from a branch") from running the output through Jekyll, which would
+# drop anything starting with an underscore.

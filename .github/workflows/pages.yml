@@ -1,0 +1,83 @@
+name: pages
+
+# The engine's tests and the demo's tests run on every push and pull request; only a push to main
+# deploys. The demo is a static build of `web/` served as a GitHub Pages project page, so it lives under
+# /<repo>/ - hence VITE_BASE below.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The workspace's default members are the engine alone, so this is the engine's 68 tests.
+      - run: cargo test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      # The wasm engine itself is not in the loop here: the browser-side bits that can run in Node (the
+      # worker's message contract, the occupancy words, the setup and controller logic) are.
+      - run: npm test
+        working-directory: web
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      # The CLI version has to equal the `wasm-bindgen` the adapter links, or the post-processing fails
+      # with a schema error. `web/scripts/build-wasm.mjs` checks the two agree before it builds; if this
+      # action ever lacks the version, `cargo install wasm-bindgen-cli --version 0.2.129 --locked` works.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.129
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+        env:
+          # Project pages are served from /<repo>/, so the built asset URLs need the prefix.
+          VITE_BASE: /slap5/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

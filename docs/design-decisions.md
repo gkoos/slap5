@@ -6,7 +6,7 @@
 
 ## Board
 - **Padded linear bitboard, one per player.** Cell (row, col) is bit `row*16 + col`; column 15 is always empty, so lines never wrap across rows and no edge masks are needed. The four directions are shifts of 1, 16, 15 and 17.
-- **256-bit AVX2 words when available, `[u64; 4]` otherwise.** Selected at compile time (`Words` in `src/lib.rs`). On x86-64, `.cargo/config.toml` sets `target-cpu=native`; without AVX2 the scalar words are used, and they are the reference in tests and the fallback for WebAssembly.
+- **256-bit AVX2 words when available, `[u64; 4]` otherwise.** Selected at compile time (`Words` in `engine/src/lib.rs`). On x86-64, `.cargo/config.toml` sets `target-cpu=native`; without AVX2 the scalar words are used, and they are the reference in tests and the fallback for WebAssembly.
 - **Measured** (synthetic positions, one machine, one run): AVX2 was about 3× faster than `[u64; 4]` for win detection and about 4× for a whole-board five-completion mask; make/unmake was slightly slower (86 ns vs 53 ns for 60 operations).
 - **Rejected:** `[u128; 2]` (slower than `[u64; 4]` on every operation) and four per-direction line boards (about 1.9× slower than AVX2 on completion masks).
 
@@ -34,7 +34,7 @@
 - **Free-ply cap is measured from the root** and the time check is the real bound. Results found under a cap are then slightly path-dependent in the transposition table; this is accepted and to be measured.
 
 ## Protocol
-- **Executable name `pbrain-high5`**: Piskvork requires the `pbrain-` prefix.
+- **Executable name `pbrain-slap5`**: Piskvork requires the `pbrain-` prefix.
 - **The engine is player 0, the opponent player 1**, whatever colour each plays. `BOARD` labels (1 own, 2 opponent) map to this directly.
 - **Opponent moves that are out of range or on an occupied cell are answered `ERROR`** and the engine keeps running.
 - **`INFO` is accepted and ignored for now.**
@@ -44,7 +44,7 @@
 - Tests I wrote only show that code matches its stated definitions. Strength is judged by matches against Tito, PentaZen and Rapfi at equal time per move.
 - The sources and binaries of those engines are kept in `external/` (git-ignored). Tito is closed source.
 - **Measurement rules, because matches cannot settle small changes** (at a quarter win rate, 20 games per arm has a standard error of about 1.4 games). Every change is checked with the tests, the position suite (default and the switch the change touches) and depth and nodes at equal time read per position — a range across positions hid a full ply during the pruning work. Before a change in search behaviour is kept, a 20-game match on openings that were not used before, against `external\pela\pbrain-pela.exe` - the build the rating refers to, not Piskvork's bundled copy of the same version string - and against Tito, with two games treated as noise and four as worth investigating. A big match (all 41 openings, both colours, 82 games per arm) is for changes expected to be large, with the threshold fixed beforehand. Openings already used by the suite's source games or an earlier match are not reused for tuning; A/B runs compare binaries built from two revisions (a `git worktree` at the old revision is the control), never two engine settings, because Piskvork passes no switches to the engine; every run writes its openings, engine hash and revision to `run-info.txt`.
-- **A change to the evaluation's scale is calibrated before it is played.** The futility margin, the null-move condition and the horizon return are all in the same units as the eval, so changing what the eval counts - `shape_score` now counts threat groups instead of the cells where a shape can be played, which had charged one threat two to four times - silently re-tunes the search. `scripts/retune.ps1` builds the shipped revision next to the working tree (stashing `src/eval.rs` and `src/search.rs`, then popping), runs the position suite and the game corpus with both, and prints nodes and `pruned` per position at equal depth. The class values were scaled 1.2x to put the eval's average magnitude back where the margin's game result was measured; at that scale the node count at equal depth is 0.974 of the shipped build's, and the build scored 53W-46L-1E against KANEC over 100 games at 1 s per move (shipped: 48W-47L-5E). Level to slightly ahead, not established.
+- **A change to the evaluation's scale is calibrated before it is played.** The futility margin, the null-move condition and the horizon return are all in the same units as the eval, so changing what the eval counts - `shape_score` now counts threat groups instead of the cells where a shape can be played, which had charged one threat two to four times - silently re-tunes the search. `engine/scripts/retune.ps1` builds the shipped revision next to the working tree (stashing `engine/src/eval.rs` and `engine/src/search.rs`, then popping), runs the position suite and the game corpus with both, and prints nodes and `pruned` per position at equal depth. The class values were scaled 1.2x to put the eval's average magnitude back where the margin's game result was measured; at that scale the node count at equal depth is 0.974 of the shipped build's, and the build scored 53W-46L-1E against KANEC over 100 games at 1 s per move (shipped: 48W-47L-5E). Level to slightly ahead, not established.
 - **Pruning is compared on quiet positions, not on the suite.** `eval_from_games` prints the sample's nodes, `pruned` and `pruned` per node at its fixed depth, with the clock out of it, and that is the only valid way to see what a change in the eval's scale or in the class ratios does to pruning. The position suite cannot do it: it is time-limited and tactical, so a ratio change alters which forced lines the search pursues and the node count moves for reasons that have nothing to do with the margin - it read 1.122 of the shipped revision at one scale and 1.335 at a smaller one. Reference, current build (counting fix, 1:1 four-to-open-three, `[3240, 1620, 162, 162, 27, 9]`) on 41 sampled quiet positions at depth 5: **11,023,493 nodes, 268,866 per position, pruned/node 2.159**.
 - **The first such match changed how the next steps were ordered.** Openings 10–19 against Tito and 20–24 against pela, control built from the revision before the shape work: after 8W–21L–1T, before 7W–22L–1T over 30 games per arm. Nothing worse, and nothing a 30-game match can resolve; both revisions lose the Tito games in about twenty moves per side, so the ordering and evaluation work of findings 1 and 2 did not move the outcome and the forcing horizon of finding 3 is where the losses are.
 
@@ -59,3 +59,88 @@ the audit findings below, the audit findings below, the audit findings below and
 - **The double-threat extension's match evidence did not replicate.** Openings 10-19 took Tito from 4W-16L to 7W-13L; the fresh 25-34 block then scored 3W-16L-1T against the control's 5W-15L, i.e. 10W-29L-1T against 9W-31L over 40 games per arm. Kept as principled, not as a gain.
 - **The free-ply cap is measurable and the default is the right end of it.** Suite 21/21 at the default cap 64 and at cap 24 and 12, 18/21 at cap 8; on games, cap 12 scored 2W-18L and 0W-20L against Tito where the default scored 3W-17L and the 80-game arm 23W-80 on the same openings.
 - **Local optimisation.** Five changes were prototyped, three are in the engine, two are not. Applied: the deferred static evaluation (computed after the table probe and only when `!root && selective && !forced && (futility || razor)`, which is the guard set of all its readers), the read-only set-bit iterator (`Bits::words`/`Bits::bits`, used by `Scores::new` and the two ordering builders) and the bulk discard of the pruned tail at `ply >= 2`. All three preserve every move, score, depth and `Stats` field. The audit measured the five together at **16.1% less search time at the median of six paired runs**, on its own corpus at cap 12 with mate verification off, so that is not a production figure; on the changed tree at depth 5 against a 482.14 ms baseline the bulk discard alone measured **446.29 ms (-7.4%)**, the largest remaining delta and why it was the third change applied. Not applied: the per-node double-threat mask (a sign flip, -4.5% in the audit against +5.0% re-measured), compact `Shapes` (memory only, 3,072 -> 1,920 bytes with the layout check confirming it, but 2.7% slower) and narrowing `Scores::shape` to `i16` (bound 1,800, never benchmarked). Type sizes measured then: `Shapes` 3,072, `Scores` 2,048, `MoveList` 1,816, `Move` 8, `Entry` 16, `Board` 128, `Stats` 1,808, `Searcher` 4,720 bytes.
+
+## Repository shape (17 October 2026)
+
+The browser demo added a second consumer of the engine, so the repository became a workspace: `engine/` is
+the crate the Piskvork binary and every measurement build from, `crates/slap5-wasm/` is the browser
+adapter, and `web/` is the page. What did *not* move matters as much as what did: `Cargo.lock` and
+`target/` stay at the root, so `target/release/pbrain-slap5.exe` keeps the path the README, the match
+script and every log reference, and the settings below are what keep the native build what it was.
+
+- **`.cargo/config.toml` stays at the root, and has to.** Cargo finds config files by walking up from the
+  *current directory*, not from the manifest, so an `engine/.cargo/config.toml` would be invisible to a
+  build run from the root: that build would silently lose `target-cpu=native`, `target_feature = "avx2"`
+  would not be set, and the scalar board - measured 3-4x slower on the mask operations the search is made
+  of - would be used with no warning at all. `engine/src/tests.rs::avx2_words_are_selected_where_available`
+  fails the suite instead: where the CPU has AVX2, the build must have selected it.
+- **Profiles are read from the root manifest only**, so `[profile.test] opt-level = 3` lives there now.
+  A profile left in `engine/Cargo.toml` would be ignored with a warning and the search tests - far too slow
+  unoptimized - would quietly become the slowest thing in the repository.
+- **The adapter gets a profile of its own because `lto` cannot be overridden per package.**
+  `[profile.wasm-release]` inherits release, adds LTO and one codegen unit, and is used only by
+  `web/scripts/build-wasm.mjs`; the engine's release profile, the artifact matches are measured with, is
+  not touched by a wasm build.
+- **`default-members = ["engine"]`.** A bare `cargo build|test|bench|run` at the root does what it did
+  before the split. Without it, `cargo build` would also build the adapter for x86_64 and emit a stray DLL.
+- **`external/`, `logs/` and `target/` stay at the root.** They are the third-party engines, the match
+  records and the build output, all untracked, and leaving them there kept the ~30 `external/...` and
+  `logs/...` references in this file, the roadmap and the README valid as written.
+
+## WebAssembly (17 October 2026)
+
+This file has said since the beginning that WebAssembly is a secondary target and that the scalar words are
+the fallback for it. This is that target becoming real: `crates/slap5-wasm/` exposes the search to a
+browser and `web/` is the page that drives it. The engine was not restructured for it - the native path,
+the protocol and the measurements are untouched - and the four things that did have to change are all about
+the host rather than the search.
+
+- **The adapter is a separate crate** because `crate-type` cannot be set per target: adding `cdylib` to the
+  engine would emit a native `slap5.dll` on every ordinary build. It is `["cdylib", "rlib"]`, the rlib so
+  its own marshalling is testable natively (`cargo test -p slap5-wasm`) - which is why the decoding and the
+  search call are plain functions taking a Rust callback, with only the two JS calls in the exported
+  methods.
+- **`wasm-bindgen` is pinned exactly on both sides** (`=0.2.129`). The crate the adapter links and the CLI
+  that post-processes the binary have to be the same version or the rewrite fails with a schema error, so
+  the build script compares the version resolved in `Cargo.lock` with `wasm-bindgen --version` and stops
+  if they differ.
+- **The clock is the host's on wasm32.** `std::time::Instant::now()` panics on `wasm32-unknown-unknown`
+  ("time not implemented on this platform"): that target is host-agnostic, so `std` cannot supply a clock
+  and the host has to. `engine/src/clock.rs` re-points that one type - `performance.now()` on wasm32,
+  `std::time::Instant` everywhere else, `Duration` untouched - and `search.rs` reads the deadline the same
+  way on both. `performance.now()` rather than `Date.now()`, because the deadline arithmetic assumes a
+  monotonic clock. The import costs a call into JavaScript every 1024 nodes, the interval the deadline
+  check already used.
+- **The page's positions are decoded, not re-encoded.** The UI keeps eight signed 32-bit words per colour
+  (bit `row * 15 + col`); the engine keeps a padded 256-bit board per colour (bit `row * 16 + col`). The
+  adapter converts at the boundary and rejects a padding bit or a cell holding both colours rather than
+  searching it - the page calls that position invalid, and searching it would mean one cell existing for
+  both players.
+- **The search reports its completed iterations.** `Searcher::search_observing` is `search` with a callback
+  (depth, x, y, score) per completed iteration; `search` passes a no-op, so the protocol and the suite are
+  unchanged by it. That is what lets the page show progress and, more importantly, play the last finished
+  move when the user asks for the move early. The engine's rule still holds - an iteration the deadline
+  interrupts is never reported - so what the page holds is always a move the engine would have played. For
+  a mate the report carries the move `verify_mate` settled on rather than the one the selective search
+  returned first, so the single report per depth is the one the result carries.
+- **The page's progress bar interpolates between reports; the engine does not report progress.** Iterations
+  get further apart as the search deepens, so a bar driven only by the completed ones jumps and then stands
+  still for seconds. The client runs a 120 ms tick that takes the higher of two estimates: elapsed time
+  against the level's budget, and a saturating approach to the *next* depth's share of the bar, paced by how
+  long the last iterations took (they grow geometrically). Both are monotone, the second cannot reach the
+  next depth, and either way the bar stops at 95% until the move arrives - so it never claims progress the
+  engine has not made. The engine stays free of UI concerns: it reports completed iterations and nothing
+  else, and a node-level number would have to be paid for across the wasm boundary.
+- **2^19 transposition entries (8 MB) in the browser** against 2^21 (32 MB) natively: every cancelled
+  search terminates its worker and the next one allocates a fresh table, so the page trades a little depth
+  in long positions for a cheaper start.
+- **Cancellation is worker termination**, because a synchronous wasm search cannot read a message while it
+  runs. The page already worked that way against its JavaScript engine (`web/src/ai/client.js`), so only the
+  thing being terminated changed; one engine per worker keeps the table, the killers and the history across
+  the moves of a game.
+- **The browser target has no AVX2**, so the page runs the scalar board and reaches lower depths per second
+  than the native build. A `simd128` word type is the obvious lever and is open; it would be a third `Bits`
+  implementation, and the scalar one exists precisely because the search had to stay correct without AVX2.
+
+
+

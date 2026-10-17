@@ -1,3 +1,8 @@
 /target
 external/
 logs/
+
+# The web demo's dependencies, build output and generated wasm-bindgen package.
+/web/node_modules
+/web/dist
+/web/src/wasm

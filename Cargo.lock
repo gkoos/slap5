@@ -214,13 +214,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
 
 [[package]]
-name = "high5"
-version = "0.1.0"
-dependencies = [
- "criterion",
-]
-
-[[package]]
 name = "is-terminal"
 version = "0.4.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -454,6 +447,23 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
+name = "slap5"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "slap5-wasm"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "slap5",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "syn"

@@ -1,0 +1,25 @@
+﻿[package]
+name = "slap5"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[dev-dependencies]
+criterion = "0.5"
+
+# `src/clock.rs` reads the deadline from the host on wasm32-unknown-unknown, where `std::time::Instant`
+# panics. Nothing in this table is built for the native targets, so the engine keeps its empty native
+# dependency list. The pin matches the `wasm-bindgen` CLI that post-processes the wasm binary.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.129"
+
+[[bench]]
+name = "threats"
+harness = false
+
+[[bin]]
+name = "pbrain-slap5"
+path = "src/main.rs"
+
+

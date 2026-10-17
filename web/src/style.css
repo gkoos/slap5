@@ -1,0 +1,759 @@
+:root {
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  place-items: center;
+  min-width: 320px;
+  min-height: 100vh;
+  width: 100vw;
+  background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+  overflow-x: hidden;
+}
+
+#app {
+  max-width: 1280px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 0.5rem;
+  text-align: center;
+}
+
+@media (min-width: 768px) {
+  #app {
+    padding: 1.5rem;
+  }
+}
+
+.github-link a {
+  color: #ffffff;
+  text-decoration: none;
+  font-weight: 600;
+  transition: color 0.3s ease;
+}
+
+.github-link a:hover {
+  color: #ffd700;
+}
+
+.game-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+@media (min-width: 768px) {
+  .game-container {
+    gap: 16px;
+  }
+}
+
+h1 {
+  font-size: 2em;
+  line-height: 1.1;
+  margin: 0;
+  color: #ffffff;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+@media (min-width: 768px) {
+  h1 {
+    font-size: 2.5em;
+  }
+}
+
+.game-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+  min-height: 70px;
+}
+
+@media (min-width: 768px) {
+  .game-info {
+    flex-direction: row;
+    gap: 16px;
+  }
+}
+
+#game-status {
+  font-size: 1em;
+  font-weight: 600;
+  color: #ffffff;
+  padding: 8px 15px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  min-width: 160px;
+  min-height: 45px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+@media (min-width: 768px) {
+  #game-status {
+    font-size: 1.2em;
+    padding: 10px 20px;
+    min-width: 180px;
+    min-height: 55px;
+  }
+}
+
+#game-status.no-game {
+  background: transparent;
+  border: 1px solid transparent;
+  backdrop-filter: none;
+  padding: 10px 20px; /* Keep same padding for consistent spacing */
+}
+
+#game-status.game-over {
+  background: rgba(255, 215, 0, 0.2);
+  border-color: rgba(255, 215, 0, 0.5);
+  color: #ffd700;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+.reset-button {
+  padding: 8px 16px;
+  font-size: 0.85em;
+  font-weight: 600;
+  color: #ffffff;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+@media (min-width: 768px) {
+  .reset-button {
+    padding: 10px 20px;
+    font-size: 0.9em;
+  }
+}
+
+.reset-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+.reset-button:active {
+  transform: translateY(0);
+}
+
+.board {
+  /* A real board leaves only a thin rim outside its grid: the lattice's own half-cell inset *is* the
+     margin, so this is a couple of pixels of wood outside it. A wider ring of wood around the grid makes
+     the outer lines look like a picture frame rather than rows and columns you can play on. */
+  --pad: 2px;
+  display: grid;
+  grid-template-columns: repeat(15, 1fr);
+  grid-template-rows: repeat(15, 1fr);
+  gap: 0;
+  background: #DEB887;
+  padding: var(--pad);
+  border-radius: 0;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  border: 2px solid #654321;
+  position: relative;
+  width: calc(100vw - 3rem);
+  max-width: 350px;
+  aspect-ratio: 1;
+  margin: 0 auto;
+  overflow: hidden;
+}
+
+@media (min-width: 375px) {
+  .board {
+    max-width: 340px;
+    width: calc(100vw - 2.5rem);
+  }
+}
+
+@media (min-width: 480px) {
+  .board {
+    max-width: 420px;
+    width: calc(100vw - 4rem);
+  }
+}
+
+@media (min-width: 768px) {
+  .board {
+    max-width: 480px;
+    width: calc(100vw - 6rem);
+  }
+}
+
+@media (min-width: 1024px) {
+  .board {
+    max-width: 520px;
+    width: min(calc(100vw - 8rem), 520px);
+  }
+}
+
+@media (min-width: 1200px) {
+  .board {
+    max-width: 560px;
+    width: min(calc(100vw - 10rem), 560px);
+  }
+}
+
+@media (min-width: 768px) and (max-height: 900px) {
+  .game-container {
+    gap: 10px;
+  }
+  
+  h1 {
+    font-size: 2.2em;
+  }
+  
+  .board {
+    max-width: 450px;
+  }
+}
+
+@media (min-width: 1024px) and (max-height: 900px) {
+  .board {
+    max-width: 480px;
+  }
+}
+
+/* The lattice. The stones sit on the crossings, so the lines run through the centres of the cells - which
+   is why the lines are drawn by tiling a *one-cell* background with the line at the tile's centre rather
+   than by a repeating gradient with the line at its period start: that puts the last line of each direction
+   exactly on the box boundary, where it is never painted, and the board loses its right and bottom edges.
+
+   Three boxes, because each direction has to be positioned on one axis and trimmed on the other:
+   `.lines` covers the 15x15 cells and carries the star points; `::before` carries the vertical lines,
+   trimmed half a cell top and bottom; `::after` the horizontal ones, trimmed half a cell left and right.
+   Every percentage below is either 100%/15 of a box that is exactly 15 cells across, or 100%/30 of one
+   that is 15 cells across for half a cell. */
+.board .lines {
+  position: absolute;
+  inset: var(--pad);
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle at 23.3333% 23.3333%, #8B4513 0, #8B4513 3px, transparent 3px),
+    radial-gradient(circle at 76.6667% 23.3333%, #8B4513 0, #8B4513 3px, transparent 3px),
+    radial-gradient(circle at 23.3333% 76.6667%, #8B4513 0, #8B4513 3px, transparent 3px),
+    radial-gradient(circle at 76.6667% 76.6667%, #8B4513 0, #8B4513 3px, transparent 3px);
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+}
+
+.board .lines::before,
+.board .lines::after {
+  content: '';
+  position: absolute;
+}
+
+.board .lines::before {
+  inset: calc(100% / 30) 0;
+  background-image: linear-gradient(
+    to right,
+    transparent calc(50% - 0.5px),
+    #8B4513 calc(50% - 0.5px),
+    #8B4513 calc(50% + 0.5px),
+    transparent calc(50% + 0.5px)
+  );
+  background-size: calc(100% / 15) 100%;
+}
+
+.board .lines::after {
+  inset: 0 calc(100% / 30);
+  background-image: linear-gradient(
+    to bottom,
+    transparent calc(50% - 0.5px),
+    #8B4513 calc(50% - 0.5px),
+    #8B4513 calc(50% + 0.5px),
+    transparent calc(50% + 0.5px)
+  );
+  background-size: 100% calc(100% / 15);
+}
+
+/* A cell is invisible except for what it holds. The lines belong to the lattice layer above (below the
+   cells in paint order), and an opaque cell would hide them behind a square. */
+.cell {
+  background: none;
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+}
+
+/* Hovering previews the stone: a soft disc on the crossing instead of a filled square. */
+.cell:hover {
+  background-image: radial-gradient(circle closest-side, rgba(139, 69, 19, 0.35), transparent);
+  background-size: 86% 86%;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.cell.stone {
+  cursor: default;
+}
+
+.cell.stone:hover {
+  background-image: none;
+}
+
+.cell.stone.black::before {
+  content: '';
+  width: 86%;
+  height: 86%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #555, #000);
+  box-shadow: 
+    inset -2px -2px 4px rgba(255, 255, 255, 0.1),
+    2px 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+
+
+.cell.stone.white::before {
+  content: '';
+  width: 86%;
+  height: 86%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #fff, #e0e0e0);
+  box-shadow: 
+    inset -2px -2px 4px rgba(0, 0, 0, 0.1),
+    2px 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+
+
+/* Center board marker */
+.cell.center-marker::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  background: #8B4513;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 
+    0 0 2px rgba(0, 0, 0, 0.3),
+    inset 0 0 2px rgba(255, 255, 255, 0.2);
+  z-index: 1;
+}
+
+
+
+/* Hide center marker when stone is placed */
+.cell.center-marker.stone::after {
+  display: none;
+}
+
+/* Winning stone highlighting */
+.cell.winning-stone {
+  position: relative;
+  z-index: 10;
+}
+
+.cell.winning-stone.stone.black::before {
+  animation: winningStoneGlow 1.5s ease-in-out infinite;
+  box-shadow: 
+    inset -2px -2px 4px rgba(255, 255, 255, 0.1),
+    2px 2px 6px rgba(0, 0, 0, 0.4),
+    0 0 20px rgba(255, 215, 0, 0.8),
+    0 0 40px rgba(255, 215, 0, 0.4);
+}
+
+.cell.winning-stone.stone.white::before {
+  animation: winningStoneGlow 1.5s ease-in-out infinite;
+  box-shadow: 
+    inset -2px -2px 4px rgba(0, 0, 0, 0.1),
+    2px 2px 6px rgba(0, 0, 0, 0.2),
+    0 0 20px rgba(255, 215, 0, 0.8),
+    0 0 40px rgba(255, 215, 0, 0.4);
+}
+
+/* Last move highlighting */
+.cell.last-move {
+  position: relative;
+  z-index: 5;
+}
+
+.cell.last-move::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  background: #ff4444;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 
+    0 0 8px rgba(255, 68, 68, 0.8),
+    inset 0 0 4px rgba(255, 255, 255, 0.3);
+  animation: lastMovePulse 2s ease-in-out infinite;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* When a stone is both winning and last move, hide the red dot */
+.cell.winning-stone.last-move::after {
+  display: none;
+}
+
+@keyframes winningStoneGlow {
+  0%, 100% { 
+    transform: scale(1);
+    box-shadow: 
+      inset -2px -2px 4px rgba(255, 255, 255, 0.1),
+      2px 2px 6px rgba(0, 0, 0, 0.4),
+      0 0 20px rgba(255, 215, 0, 0.8),
+      0 0 40px rgba(255, 215, 0, 0.4);
+  }
+  50% { 
+    transform: scale(1.1);
+    box-shadow: 
+      inset -2px -2px 4px rgba(255, 255, 255, 0.1),
+      2px 2px 6px rgba(0, 0, 0, 0.4),
+      0 0 30px rgba(255, 215, 0, 1),
+      0 0 60px rgba(255, 215, 0, 0.6);
+  }
+}
+
+@keyframes lastMovePulse {
+  0%, 100% { 
+    opacity: 0.7;
+    transform: translate(-50%, -50%) scale(1); 
+  }
+  50% { 
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.2); 
+  }
+}
+
+/* Player selector styles */
+.player-selector {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  max-width: 100%;
+}
+
+@media (min-width: 480px) {
+  .player-selector {
+    gap: 10px;
+    padding: 12px 16px;
+  }
+}
+
+@media (min-width: 768px) {
+  .player-selector {
+    gap: 12px;
+  }
+}
+
+.player-selector label {
+  font-weight: 600;
+  color: #ffffff;
+  font-size: 0.75em;
+  text-align: center;
+  white-space: nowrap;
+}
+
+@media (min-width: 768px) {
+  .player-selector label {
+    font-size: 1em;
+  }
+}
+
+.player-selector select {
+  padding: 4px 6px;
+  border: 2px solid #4a90e2;
+  border-radius: 4px;
+  font-size: 0.7em;
+  font-weight: 500;
+  background: #ffffff;
+  color: #333;
+  transition: all 0.3s ease;
+  min-width: 80px;
+  cursor: pointer;
+}
+
+@media (min-width: 768px) {
+  .player-selector select {
+    padding: 8px 12px;
+    font-size: 0.9em;
+    min-width: 130px;
+    border-radius: 6px;
+  }
+}
+
+.player-selector select:hover:not(:disabled) {
+  border-color: #357abd;
+  box-shadow: 0 0 8px rgba(74, 144, 226, 0.3);
+}
+
+.player-selector select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: #f5f5f5;
+}
+
+.start-button {
+  padding: 6px 12px;
+  background: linear-gradient(45deg, #28a745, #20c997);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.7em;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+@media (min-width: 768px) {
+  .start-button {
+    padding: 10px 20px;
+    font-size: 0.9em;
+    border-radius: 6px;
+  }
+}
+
+.start-button:hover {
+  background: linear-gradient(45deg, #218838, #1da57a);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.start-button:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Progress bar styles for AI thinking */
+.progress-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 180px;
+}
+
+@media (min-width: 768px) {
+  .progress-container {
+    gap: 8px;
+    min-width: 200px;
+  }
+}
+
+.progress-text {
+  font-size: 0.9em;
+  font-weight: 600;
+  color: #ffffff;
+  text-align: center;
+}
+
+@media (min-width: 768px) {
+  .progress-text {
+    font-size: 1em;
+  }
+}
+
+.progress-bar {
+  width: 180px;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  position: relative;
+}
+
+@media (min-width: 768px) {
+  .progress-bar {
+    width: 200px;
+    height: 10px;
+    border-radius: 5px;
+  }
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4CAF50, #66BB6A, #8BC34A);
+  width: 0%;
+  transition: width 0.15s ease-out; /* Faster, smoother transition */
+  border-radius: 4px;
+  box-shadow: 0 0 15px rgba(76, 175, 80, 0.6);
+  position: relative;
+}
+
+.progress-fill::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 30px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3));
+  border-radius: 0 4px 4px 0;
+}
+
+.progress-fill.animated {
+  animation: progressPulse 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes progressPulse {
+  0% { 
+    box-shadow: 0 0 15px rgba(76, 175, 80, 0.6);
+    filter: brightness(1);
+  }
+  100% { 
+    box-shadow: 0 0 25px rgba(76, 175, 80, 0.9);
+    filter: brightness(1.1);
+  }
+}
+
+/* Disabled board state */
+.board.disabled {
+  opacity: 0.6;
+  filter: grayscale(0.7);
+  pointer-events: none;
+  background: #C4A484;
+  border-color: #8B7355;
+}
+
+.board.disabled .cell {
+  cursor: not-allowed;
+}
+
+.board.disabled .cell:hover {
+  background-image: none;
+}
+
+.board.disabled::after {
+  content: "Select settings and click 'Start Game'";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 10px 15px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: bold;
+  text-align: center;
+  white-space: nowrap;
+  z-index: 10;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+  max-width: 90%;
+}
+
+@media (min-width: 480px) {
+  .board.disabled::after {
+    content: "Select your settings and click 'Start Game' to begin";
+    padding: 12px 20px;
+    border-radius: 10px;
+    font-size: 14px;
+  }
+}
+
+@media (min-width: 768px) {
+  .board.disabled::after {
+    padding: 15px 25px;
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 768px) {
+  .progress-container {
+    min-width: 180px;
+  }
+  
+  .progress-bar {
+    width: 160px;
+    height: 8px;
+  }
+  
+  .progress-text {
+    font-size: 1em;
+  }
+  
+  .game-info {
+    min-height: 70px;
+  }
+  
+  #game-status {
+    min-width: 180px;
+    min-height: 50px;
+  }
+}
+
+@media (max-width: 480px) {
+  .progress-container {
+    min-width: 140px;
+  }
+  
+  .progress-bar {
+    width: 120px;
+    height: 6px;
+  }
+  
+  .progress-text {
+    font-size: 0.9em;
+  }
+  
+  .game-info {
+    min-height: 60px;
+  }
+  
+  #game-status {
+    min-width: 140px;
+    min-height: 45px;
+    font-size: 1.3em;
+  }
+}
+
+
+
+#move-now-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
