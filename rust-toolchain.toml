@@ -1,0 +1,10 @@
+# Declare the toolchain instead of inheriting whatever the machine happens to have: the same compiler
+# builds locally, in CI and for a release, and the wasm target is available without a separate
+# `rustup target add`.
+#
+# The channel floats on stable. Pinning an exact version here (e.g. "1.99.0") would make a release more
+# reproducible, at the cost of bumping this file by hand.
+[toolchain]
+channel = "stable"
+targets = ["wasm32-unknown-unknown"]
+components = ["clippy", "rustfmt"]

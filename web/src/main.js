@@ -11,3 +11,8 @@ const game = createGameController({
 });
 game.initGame();
 window.addEventListener('beforeunload', game.cleanup);
+
+// The version this page was built from, injected from the workspace manifest by vite.config.js. It ties a
+// deployed page to a git tag, so "which engine is live" needs no guessing.
+const version = document.getElementById('site-version');
+if (version) version.textContent = `slap5 ${__SLAP5_VERSION__}`;

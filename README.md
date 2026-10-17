@@ -32,6 +32,20 @@ npm run dev
 
 The search runs in a Web Worker at one of four budgets - 300 ms and 2 plies at easy through 8 s and 12 plies at expert. "Move now" plays the last iteration that finished and terminates the worker, which is the only way to stop a synchronous wasm search. The progress bar interpolates between the engine's per-iteration reports - elapsed time against the level's budget, plus a bounded approach to the next depth's share of the bar - so it keeps moving instead of stalling as the iterations lengthen. The browser target has no AVX2, so the page uses the scalar board that the native build measured 3-4x slower on the mask operations.
 
+## Releases
+
+The version lives in one place: `[workspace.package] version` in the root `Cargo.toml`. Both crates inherit it, the engine reports it over the protocol (`ABOUT` answers `name="slap5", version="..."`), and `web/vite.config.js` reads the same file so the deployed page prints the version it was built from.
+
+Cutting a release needs no local tooling:
+
+1. Land changes on `main` with conventional commit messages.
+2. `release-plz` opens (and keeps updating) a `chore: release vX.Y.Z` pull request that bumps that one line and writes `CHANGELOG.md` from the commits since the last tag.
+3. Merge it. `release-plz` tags the commit `vX.Y.Z` and creates the GitHub Release; the same workflow then builds `pbrain-slap5.exe` and attaches it with a `.sha256`, zipped together, to that release.
+
+The published binary is built with `-C target-cpu=x86-64-v3` instead of the `target-cpu=native` that `.cargo/config.toml` sets for local builds: an artifact has to run on any x86-64 CPU with AVX2, which is also the board the engine selects whenever the build has AVX2. Local builds and measurements keep `native`, as before.
+
+Nothing is published to crates.io - `release-plz.toml` sets `publish = false`, because the engine ships as a binary and the wasm adapter only as the package the page bundles.
+
 ## Play
 
 The executable is `target/release/pbrain-slap5.exe`. In Piskvork, open Players > Settings (F4) and select it. Piskvork must be set to a 15×15 board; the engine rejects other sizes.
@@ -80,6 +94,8 @@ The suite is 20 unique tactical positions from earlier losses, labelled by a pro
 - `web/`: the browser demo built on that adapter, deployed to GitHub Pages
 - `web/scripts/build-wasm.mjs`: builds the adapter and post-processes it into `web/src/wasm/`
 - `.github/workflows/pages.yml`: tests, builds and deploys the demo
+- `.github/workflows/release.yml`, `release-plz.toml`: the release pull request, the tag and the binary
+- `rust-toolchain.toml`: the toolchain and the wasm target a build gets
 - `docs/algorithm.md`: the algorithm and what is implemented
 - `docs/design-decisions.md`: why things are the way they are
 - `docs/roadmap.md`: the improvement queue and the measurement rules

@@ -13,6 +13,15 @@ members = ["engine", "crates/slap5-wasm"]
 # is built with an explicit `-p slap5-wasm --target wasm32-unknown-unknown` (see web/scripts/build-wasm.mjs).
 default-members = ["engine"]
 
+# The version is written here and nowhere else. Both members inherit it, the engine reports it over the
+# protocol (`ABOUT`), and `web/vite.config.js` reads this file to stamp the page. A release bumps this one
+# line: `release-plz` does it from the conventional commits and writes CHANGELOG.md in the same pull request.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Edition 2024 needs 1.85. Nothing here is published, so this is informational.
+rust-version = "1.85"
+
 # Profiles are read from the root manifest only, so this cannot stay in `engine/Cargo.toml`.
 # The search tests are far too slow unoptimized (the AVX2 intrinsics are not inlined); debug assertions stay on.
 [profile.test]

@@ -1,0 +1,97 @@
+name: release
+
+# On every push to main:
+#
+#   release-pr  keeps a "chore: release vX.Y.Z" pull request up to date: it bumps
+#               `[workspace.package] version` in Cargo.toml and writes CHANGELOG.md from the conventional
+#               commits since the last tag. You review and merge it.
+#   release     tags the merged commit and creates the GitHub Release for that version.
+#   build       builds pbrain-slap5.exe and attaches it, with its sha256, to the release the previous job
+#               just created.
+#
+# The build cannot be a separate `on: push: tags` workflow: a tag pushed with GITHUB_TOKEN does not start
+# workflows, so the artifact would silently never be built.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release:
+    needs: release-pr
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Read the workspace version
+        id: version
+        shell: pwsh
+        run: |
+          $match = Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          "version=$($match.Matches[0].Groups[1].Value)" >> $env:GITHUB_OUTPUT
+      - name: Build the Piskvork binary
+        env:
+          # Deliberately not target-cpu=native, which .cargo/config.toml sets for local builds: a published
+          # binary has to run on any x86-64 CPU with AVX2, and x86-64-v3 is exactly that. The engine selects
+          # its AVX2 board whenever the build has AVX2, so the artifact matches what the measurements used.
+          RUSTFLAGS: -C target-cpu=x86-64-v3 -C strip=symbols
+        run: cargo build -p slap5 --release --target x86_64-pc-windows-msvc
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item 'target/x86_64-pc-windows-msvc/release/pbrain-slap5.exe' dist
+          $hash = (Get-FileHash 'dist/pbrain-slap5.exe' -Algorithm SHA256).Hash.ToLower()
+          "$hash  pbrain-slap5.exe" | Set-Content 'dist/pbrain-slap5.exe.sha256'
+          Compress-Archive -Path 'dist/pbrain-slap5.exe', 'dist/pbrain-slap5.exe.sha256' `
+            -DestinationPath 'dist/pbrain-slap5-windows-x64.zip'
+      - name: Attach to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "v${{ steps.version.outputs.version }}"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output "no release $tag on this push, nothing to attach"
+            exit 0
+          }
+          gh release upload $tag 'dist/pbrain-slap5-windows-x64.zip' 'dist/pbrain-slap5.exe.sha256' --clobber

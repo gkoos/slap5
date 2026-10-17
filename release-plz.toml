@@ -1,0 +1,19 @@
+# release-plz keeps a release pull request up to date from the conventional commits on main: it bumps
+# `[workspace.package] version` in Cargo.toml and writes CHANGELOG.md. Merging that pull request tags the
+# commit and creates the GitHub Release, and .github/workflows/release.yml attaches the binary to it.
+#
+# Nothing here goes to crates.io - the engine is consumed as a binary and the wasm adapter only as the
+# package the page bundles - so the registry half of release-plz is off.
+[workspace]
+publish = false
+
+# One release, not one per crate. The version is inherited by both members, so without this release-plz
+# would tag `slap5-vX.Y.Z` and `slap5-wasm-vX.Y.Z` and open two releases for the same commit.
+[[package]]
+name = "slap5"
+git_tag_name = "v{{ version }}"
+
+# The wasm adapter is internal: same version, no changelog of its own, no artifact to ship.
+[[package]]
+name = "slap5-wasm"
+release = false
