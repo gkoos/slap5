@@ -9,6 +9,7 @@ param(
     [int]$OpeningOffset = 0,
     [string]$Engine = "",
     [string]$Piskvork = "",
+    [string]$Openings = "",
     [string]$OutDir = ""
 )
 $ErrorActionPreference = 'Stop'
@@ -27,21 +28,36 @@ $engine = (Resolve-Path $Engine).Path
 $opponent = (Resolve-Path $Opponent).Path
 $piskvork = (Resolve-Path $Piskvork).Path
 $openingsPath = Join-Path (Split-Path $piskvork) 'openings.txt'
-$openings = @(Get-Content $openingsPath | Where-Object { $_.Trim() }).Count
-if ($openings -lt 1) { throw "no openings found in $openingsPath" }
+# Piskvork reads openings.txt from its own directory and has no option for another file, so a chosen list
+# is copied in for the run and the previous one put back at the end. Which list was in force is recorded,
+# because the pair indices in run-info.txt only name positions through the list they were played on.
+$openingsBackup = "$openingsPath.slap5-backup"
+if ($Openings) {
+    $Openings = (Resolve-Path $Openings).Path
+    if (-not (Test-Path $openingsBackup)) { Copy-Item $openingsPath $openingsBackup }
+    Copy-Item $Openings $openingsPath -Force
+}
+$listPath = if ($Openings) { $Openings } else { $openingsPath }
+$openings = @(Get-Content $listPath | Where-Object { $_.Trim() }).Count
+if ($openings -lt 1) { throw "no openings found in $listPath" }
 $name = [IO.Path]::GetFileNameWithoutExtension($opponent)
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $run = Join-Path (Resolve-Path $OutDir).Path ("{0}_{1:yyyyMMdd_HHmmss}" -f $name, (Get-Date))
 New-Item -ItemType Directory -Force $run | Out-Null
 
-# Record what was run: parameters, engine files and the repository revision. The engine's search
-# settings are the built-in defaults (no command-line switches are passed to it).
+# Record what was run: parameters, engine files, the opening list's identity and the repository revision.
+# The openings file's hash is here because the pair indices listed below only identify positions through it:
+# if that file changes, opening 25 in an old run is a different position from opening 25 in a new one, and
+# per-opening records pooled across the two are meaningless. The engine's search settings are the built-in
+# defaults (no command-line switches are passed to it).
 $revision = (git -C $repo rev-parse --short HEAD 2>$null)
 $dirty = @(git -C $repo status --porcelain 2>$null).Count
 @(
     "engine: $engine"
     "engine hash: $((Get-FileHash $engine -Algorithm SHA256).Hash.Substring(0, 16))"
     "opponent: $opponent"
+    "openings file: $listPath"
+    "openings hash: $((Get-FileHash $listPath -Algorithm SHA256).Hash.Substring(0, 16)); total openings: $openings"
     "pairs: $Pairs; openings: $((0..($Pairs - 1) | ForEach-Object { ($_ + $OpeningOffset) % $openings }) -join ',')"
     "timeturn_ms: $TimeTurnMs; timematch_s: $TimeMatchS; rule: 0 (freestyle); board size: Piskvork registry"
     "engine settings: defaults (Config::default)"
@@ -79,6 +95,10 @@ $rows = foreach ($i in 0..($Pairs - 1)) {
         $row
     }
 }
+
+# The chosen list goes back out of Piskvork's directory here; the backup stays behind only if this script
+# was interrupted, and then it is the file to copy back by hand.
+if ($Openings -and (Test-Path $openingsBackup)) { Move-Item -Force $openingsBackup $openingsPath }
 
 $rows | Export-Csv -NoTypeInformation (Join-Path $run 'results.csv')
 $tally = { param($rs) '{0}W {1}L {2}D {3}T {4}E' -f @($rs | ? Outcome -eq 'win').Count, @($rs | ? Outcome -eq 'loss').Count, @($rs | ? Outcome -eq 'draw').Count, @($rs | ? Outcome -eq 'truncated').Count, @($rs | ? Outcome -eq 'error').Count }
