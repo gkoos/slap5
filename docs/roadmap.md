@@ -13,6 +13,7 @@ Unchanged from the earlier work.
 - A mechanism lands behind its own switch, default off, with the default path untouched until a pool says otherwise.
 - Equivalence gates: the 62 tests, the position suite (21/21) twice, and a fixed-depth or fixed-position comparison showing identical moves, scores, depths and `Stats` where the change is supposed to be an equivalence.
 - Strength gate: 100-game pools (five 20-game blocks on held-out openings 25-34) against KANEC and pela, tallied per block, with truncated and error games counted separately.
+- **An opening index is a position only through the openings file**, so a run records that file and its hash next to the indices it used (`engine/scripts/match.ps1`, from 6 November 2026; the 94 runs before it name no list, and `engine/scripts/loss_probe.py` prints `?` for them). Per-opening records must not be pooled across runs that index different lists, and the probe prints the lists a corpus contains and warns when it mixes them. `external/piskvork/bin/openings.txt` (41 openings) is hash `AF91F09C64588B77`.
 - Twenty games cannot see a 20-Elo effect. The block-to-block swing of one binary is 3-9 wins out of 20, and the standard error of a 100-game difference is about six wins.
 - No item is adopted on a Rapfi result. At 0-20 there is no resolution to gain there.
 
@@ -156,6 +157,14 @@ A clustered bucket - several entries, replace the shallowest or the oldest - is 
 
 The deadline is the full move budget (`self.deadline = start + limits.time`); there is no half-budget reservation in the current code, and the older claim that there was one was written against an earlier revision. What is still open is small but free: does the root loop start an iteration it cannot finish, and is the budget spent evenly across a game? Answer it with per-move elapsed times and `Stats`, not with a rating test. Anything more elaborate - extending on score drop or move instability - is a match question, and at 1 s per move it is likely to be noise.
 
+## 7. Opening selection for pools
+
+The opening list decides more of a pool's score than the build does. Of the 41 openings in `external/piskvork/bin/openings.txt`, several are decided by colour rather than by play: op9 is 0W-9L as white and 8W-1L as black for us, op22 is 0-14 and 9-5, and op28 loses 11 of 12 as black against equal KANEC. Those records pool every opponent and every build, so they carry ~13 games per opening and cannot classify an opening on their own - which is the point: 41 openings over a 100-game pool is 2.4 games each, while one colour-decided opening contributes a fixed win or loss to a block, and that is much of the 3-9 win block-to-block swing.
+
+Gomocup treats openings as a controlled experiment, and that is what to copy. Its rules page states the purpose - **"in order to reduce the first player's advantage, we use balanced openings from a set"** - and from 2024 on it prepares a **fixed list of 12 openings per rule**, each played twice with the colours swapped (24 games per pair), in the same order for every pair in a group, with an even number of games per duel. The lists are chosen by hand by named strong players (Gomoku Committee RIF members, a renju 4-dan, a swap2 opening analyst), and balance is defined by deep play rather than by results. Sources: the [rules](https://gomocup.org/detail-information/) and the [2025 results page](https://gomocup.org/results/gomocup-result-2025/); the renju list in its download area has 50 openings in the same centre-relative format.
+
+That set is frozen: `engine/openings/gomocup-freestyle15-2026.txt`, the 12 openings of Gomocup 2026's freestyle 15x15 league, hash `87F69FF148CAA091`. They had to be read off the diagrams Gomocup publishes - there is no coordinate file anywhere in its file tree - which `engine/scripts/openings_from_png.py` now does, and `match.ps1 -Openings <file>` plays a run on them, copying the list into Piskvork's directory and recording its hash. Play each with both colours and read the pool per opening - an opening near 50% with both colours is balanced for us, and that is visible in ~20 games rather than 40. Keep the 41 for practice, and keep the openings that are lost in both colours (op29 loses 10 of 13 as black against equal KANEC, op26 22 of 65) as study targets, because losing with the first move is the signature of a play problem rather than a position problem. A per-opening claim is still one opening's worth of games, though, and the current build's calibration against KANEC is 50W-39L-7D over 100 games, so a report of 60W has half its margin in which openings fell in the block.
+
 ## Rejected or deferred
 
 - **The per-node double-threat mask**: measured at -4.5% in its own audit and +5.0% when re-measured on the current tree. A sign flip between runs is not a basis for a change.
@@ -173,4 +182,5 @@ The deadline is the full move budget (`self.deadline = start + limits.time`); th
 | ordering and candidates | identical fixed-depth moves, scores and depths where neutral | 100-game pools against both |
 | transposition table | identical fixed-depth results with the table on and off | only if the depth gain reaches a ply |
 | time management | per-move elapsed time and `Stats`, not a match | none - it is a probe |
+| opening selection | per-opening score with both colours against one opponent | a pool on the frozen set, read per opening |
 
