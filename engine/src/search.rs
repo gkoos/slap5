@@ -737,11 +737,6 @@ impl Searcher {
     }
 
     #[allow(clippy::too_many_arguments)]
-    /// The forced-win prover on a per-node budget: `Some` only for a win the walk has followed.
-    fn prove(&mut self, b: &mut Board, side: usize, ply: usize, depth: i32) -> Option<i32> {
-        let before = self.vcf_budget.nodes;
-        let value = vcf::vcf(b, side, ply, depth, &mut self.vcf_budget); self.stats.vcf_nodes += (before - self.vcf_budget.nodes).max(0) as u64; value
-    }
 
     fn node(&mut self, b: &mut Board, side: usize, depth: i32, mut alpha: i32, beta: i32, ply: usize, stones: u32) -> i32 {
         if self.tick() {
