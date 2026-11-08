@@ -1,4 +1,4 @@
-$root = 'c:\projects\high5'
+$root = Split-Path (Split-Path $PSScriptRoot)
 $match = Join-Path $root 'engine\scripts\match.ps1'
 $open = Join-Path $root 'engine\openings\gomocup-freestyle15-2026.txt'
 $outroot = Join-Path $root 'logs\pool-chain'

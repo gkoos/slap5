@@ -541,22 +541,25 @@ impl Searcher {
         self.age = self.age.wrapping_add(1);
         self.stats = Stats::default();
         self.stopped = false;
-        self.vcf_budget = vcf::Budget::new(VCF_NODES);
+        self.deadline = start + limits.time;
         // One deliberate VCF per move, at the root, which is where the reference engines put their
-        // decisive logic: a cheap rule test decides the move, and the search handles the rest.
+        // decisive logic: a cheap rule test decides the move, and the search handles the rest. It runs
+        // with the turn deadline already set, and the cost is reported whether or not it proves a win.
         if self.config.vcf {
             let mut root_board = *board;
             let key = root_board.hash() ^ if side == 1 { zobrist::SIDE } else { 0 };
-            if let Some(score) = vcf::vcf(&mut root_board, side, 0, VCF_ROOT_DEPTH, &mut self.vcf_budget)
-                && let Some((_, _, best)) = self.vcf_budget.probe(key)
-                && best != 0
+            let mut budget = vcf::Budget::new(VCF_NODES).with_deadline(self.deadline);
+            let before = budget.nodes;
+            let won = vcf::vcf(&mut root_board, side, 0, VCF_ROOT_DEPTH, &mut budget);
+            self.stats.vcf_nodes += (before - budget.nodes).max(0) as u64;
+            if let Some(score) = won
+                && let Some((_, _, best)) = budget.probe(key)
             {
                 let idx = best as usize;
                 on_iteration(1, idx % STRIDE, idx / STRIDE, score);
-                return Some(found(idx, score, 1, Stats::default()));
+                return Some(found(idx, score, 1, self.stats));
             }
         }
-        self.deadline = start + limits.time;
         self.killers = [[NO_MOVE; 2]; MAX_PLY];
         for h in self.history.iter_mut().flatten() {
             *h /= 2;

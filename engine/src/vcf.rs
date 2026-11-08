@@ -7,6 +7,7 @@ use crate::search::MATE;
 use crate::threats;
 use crate::zobrist;
 use crate::Board;
+use std::time::Instant;
 
 const SLOTS: usize = 1 << 12;
 const BUCKET: usize = 4;
@@ -22,17 +23,29 @@ struct Entry {
 /// What the walk may spend, and what it remembers.
 pub struct Budget {
     pub nodes: i32,
+    deadline: Option<Instant>,
     entries: Vec<Entry>,
 }
 
 impl Budget {
     pub fn new(nodes: i32) -> Self {
         let empty = Entry { key: 0, best: 0, dist: 0, depth: -1 };
-        Budget { nodes, entries: vec![empty; SLOTS * BUCKET] }
+        Budget { nodes, deadline: None, entries: vec![empty; SLOTS * BUCKET] }
+    }
+
+    #[inline]
+    /// The engine hands the walk its turn deadline: a proof that cannot finish inside the turn is
+    /// no proof, and the node budget alone does not bound the time.
+    pub fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
     }
 
     #[inline]
     fn spend(&mut self) -> bool {
+        if self.nodes & 1023 == 0 && let Some(d) = self.deadline && Instant::now() >= d {
+            self.nodes = 0;
+        }
         self.nodes -= 1;
         self.nodes >= 0
     }
@@ -117,7 +130,7 @@ fn walk(b: &mut Board, side: usize, ply: usize, depth: i32, wide: bool, budget: 
         let after_empty = b.empty();
         if threats::four_cells(after, after_empty).is_zero()
             && threats::open_three_cells(after, after_empty).is_zero()
-            && b.shapes().cells(side, threats::BLOCKED_THREE).is_zero()
+            && threats::five_cells(after, after_empty).count_ones() < 2
         {
             b.unmake(side, r, c);
             continue;
