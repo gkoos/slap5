@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/gkoos/slap5/compare/v0.1.0...v0.2.0) - 2026-11-08
+
+### Added
+
+- *(search)* prove forced wins in a capped root VCF and delete the u… ([#3](https://github.com/gkoos/slap5/pull/3))
+- *(measure)* play pools on Gomocup's frozen openings and record which list each run used ([#2](https://github.com/gkoos/slap5/pull/2))
+
+### Other
+
+- release v0.1.0 ([#1](https://github.com/gkoos/slap5/pull/1))
+
 ## [0.1.0](https://github.com/gkoos/slap5/releases/tag/v0.1.0) - 2026-10-17
 
 ### Added
