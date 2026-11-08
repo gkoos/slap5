@@ -11,6 +11,10 @@ publish = false
 # would tag `slap5-vX.Y.Z` and `slap5-wasm-vX.Y.Z` and open two releases for the same commit.
 [[package]]
 name = "slap5"
+# `publish = false` above stops the registry half, but a package that is not published is skipped by
+# release-plz unless it is explicitly released, which is why release-pr has been computing "next version
+# is 0.1.0" and opening nothing since the automation landed.
+release = true
 git_tag_name = "v{{ version }}"
 
 # The wasm adapter is internal: same version, no changelog of its own, no artifact to ship.
