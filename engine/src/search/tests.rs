@@ -28,6 +28,7 @@ fn searcher_with(f: impl FnOnce(&mut Config)) -> Searcher {
 fn plain(f: impl FnOnce(&mut Config)) -> Searcher {
     searcher_with(|c| {
         c.use_tt = false;
+        c.vcf = false;
         c.free_three_replies = false;
         c.free_four_replies = false;
         c.double_threat_ext = false;
@@ -247,9 +248,6 @@ fn the_config_switches_do_what_they_say() {
     assert!(c.null_move);
     assert!(c.apply("cap=16"));
     assert_eq!(c.free_ply_limit, 16);
-    assert!(c.apply("verify=3"));
-    assert_eq!(c.verify_ply_limit, 3);
-    assert!(!c.apply("verify=x"), "verify without a number is not a switch");
     assert!(!c.apply("cap=x"), "cap without a number is not a switch");
     assert!(!c.apply("nonsense"));
     assert_eq!(c.free_ply_limit, 16, "a rejected switch must not change anything");
@@ -292,7 +290,6 @@ fn iir_is_counted_and_does_not_lose_a_mate() {
     for (name, b) in [("chain of fours", chain_of_fours()), ("double three", double_three())] {
         let mut s = searcher_with(|c| {
             c.iir = true;
-            c.verify_ply_limit = 0;
         });
         let r = s.search(&b, 0, limits(4)).unwrap();
         assert!(r.score >= MATE_BOUND, "{name}: the mate survives IIR");
@@ -316,7 +313,6 @@ fn null_move_keeps_the_mates_and_is_counted() {
     for (name, b) in [("chain of fours", chain_of_fours()), ("double three", double_three())] {
         let mut s = searcher_with(|c| {
             c.null_move = true;
-            c.verify_ply_limit = 0;
         });
         let r = s.search(&b, 0, limits(4)).unwrap();
         assert!(r.score >= MATE_BOUND, "{name}: the mate survives null-move pruning");
@@ -325,7 +321,6 @@ fn null_move_keeps_the_mates_and_is_counted() {
     let mut off = searcher_with(|c| c.null_move = false);
     let mut on = searcher_with(|c| {
         c.null_move = true;
-        c.verify_ply_limit = 0;
     });
     off.search(&quiet, 0, limits(5)).unwrap();
     on.search(&quiet, 0, limits(5)).unwrap();
@@ -350,7 +345,6 @@ fn null_move_saves_subtrees_or_only_costs_nodes() {
         let run = |null_move: bool| {
             let mut s = searcher_with(|c| {
                 c.null_move = null_move;
-                c.verify_ply_limit = 0;
             });
             s.search(&b, 0, limits(6)).unwrap();
             (s.stats.nodes, s.stats.null_nodes, s.stats.null_cutoffs)
@@ -366,28 +360,6 @@ fn null_move_saves_subtrees_or_only_costs_nodes() {
 
 // A reported mate says whether the table-free check ran, which is the only way a log can tell a proven
 // mate from a claimed one (see `docs/design-decisions.md`).
-#[test]
-fn a_reported_mate_says_whether_it_was_proved() {
-    for (name, b) in [("chain of fours", chain_of_fours()), ("double three", double_three())] {
-        // The check is bounded in time, so the test gives it enough of it to finish proving a mate in 5.
-        let mut s = searcher_with(|c| c.verify_ms = 5_000);
-        let r = s.search(&b, 0, limits(2)).unwrap();
-        assert!(r.score >= MATE_BOUND, "{name}");
-        assert_eq!(r.mate_verified, Some(true), "{name}: a mate in 5 is short enough to prove without the table");
-        assert!(r.stats.verify_nodes > 0, "{name}: the check ran");
-    }
-    // Past `verify_ply_limit` the check cannot finish inside a turn, so the mate is reported unverified.
-    let mut s = searcher_with(|c| c.verify_ply_limit = 0);
-    let r = s.search(&double_three(), 0, limits(2)).unwrap();
-    assert!(r.score >= MATE_BOUND);
-    assert_eq!(r.mate_verified, Some(false));
-    assert_eq!(r.stats.verify_nodes, 0, "no check was attempted");
-    // With no mate there is nothing to verify.
-    let mut s = searcher();
-    let b = board(&[(0, 7, 7), (1, 7, 8), (0, 8, 8)]);
-    assert_eq!(s.search(&b, 0, limits(1)).unwrap().mate_verified, None);
-}
-
 // Two blocked threes cross at (10,8); (7,8) is a four that forces the block at (7,9) and
 // also adds a stone to column 8. Then (10,8) makes two fours at once.
 fn chain_of_fours() -> Board {
@@ -425,7 +397,7 @@ fn the_decided_positions_end_a_five_ply_win_at_depth_two() {
 fn the_default_settings_prove_wins_that_need_an_open_three() {
     let positions = [("chain of fours", chain_of_fours(), None), ("double three", double_three(), Some((7, 7)))];
     for (name, b, mv) in positions {
-        let mut s = searcher();
+    let mut s = searcher();
         let r = s.search(&b, 0, limits(2)).unwrap();
         assert!(r.score >= MATE_BOUND, "{name}: expected a proven win, got {} at depth {}", r.score, r.depth);
         if let Some(mv) = mv {
@@ -599,3 +571,24 @@ fn a_mate_iteration_reports_the_verified_move() {
     assert!(r.score.abs() >= MATE_BOUND, "score {}", r.score);
     assert_eq!(last, Some((r.depth, r.x, r.y, r.score)));
 }
+
+// The same position must score the same whatever was searched before it. The table saves work; when
+// it changes a value, the engine plays differently depending on its own history, which is how the
+// phantom mates in the pools were manufactured.
+#[test]
+fn a_position_scores_the_same_after_other_positions() {
+    let p = board(&[(0, 7, 10), (1, 9, 7), (0, 8, 8), (1, 10, 9), (0, 11, 8), (1, 10, 8)]);
+    let mut s = searcher_with(|c| c.selective = false);
+    let first = s.search(&p, 0, limits(6)).unwrap().score;
+    let mut rng = Rng(0x1234_5678_9ABC_DEF0);
+    for _ in 0..12 {
+        let junk = random_position(&mut rng, 12, 6);
+        let _ = s.search(&junk, 0, limits(4));
+    }
+    let again = s.search(&p, 0, limits(6)).unwrap().score;
+    assert_eq!(first, again, "an exact search must score a position the same whatever the table holds");
+    let mut fresh = searcher_with(|c| c.selective = false);
+    let cold = fresh.search(&p, 0, limits(6)).unwrap().score;
+    assert_eq!(first, cold, "the value depends on what the engine searched before");
+}
+

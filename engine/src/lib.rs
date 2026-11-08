@@ -7,6 +7,7 @@ pub mod game;
 pub mod protocol;
 pub mod search;
 pub mod threats;
+pub mod vcf;
 pub mod zobrist;
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]

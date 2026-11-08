@@ -140,7 +140,6 @@ pub struct MoveResult {
     y: usize,
     score: i32,
     depth: i32,
-    mate_verified: Option<bool>,
     nodes: u64,
     elapsed_ms: f64,
 }
@@ -152,7 +151,6 @@ impl From<SearchResult> for MoveResult {
             y: r.y,
             score: r.score,
             depth: r.depth,
-            mate_verified: r.mate_verified,
             nodes: r.stats.nodes,
             elapsed_ms: r.elapsed.as_secs_f64() * 1000.0,
         }
@@ -161,39 +159,29 @@ impl From<SearchResult> for MoveResult {
 
 #[wasm_bindgen]
 impl MoveResult {
-    #[wasm_bindgen(getter)]
     pub fn row(&self) -> usize {
         self.y
     }
 
-    #[wasm_bindgen(getter)]
     pub fn col(&self) -> usize {
         self.x
     }
 
     /// Depth of the last completed iteration.
-    #[wasm_bindgen(getter)]
     pub fn depth(&self) -> i32 {
         self.depth
     }
 
-    #[wasm_bindgen(getter)]
     pub fn score(&self) -> i32 {
         self.score
     }
 
     /// `null` when no mate was reported, `false` when one was reported but was too far away to verify.
-    #[wasm_bindgen(getter)]
-    pub fn mate_verified(&self) -> Option<bool> {
-        self.mate_verified
-    }
 
-    #[wasm_bindgen(getter)]
     pub fn nodes(&self) -> u64 {
         self.nodes
     }
 
-    #[wasm_bindgen(getter)]
     pub fn elapsed_ms(&self) -> f64 {
         self.elapsed_ms
     }

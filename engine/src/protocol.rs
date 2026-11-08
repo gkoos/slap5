@@ -110,14 +110,9 @@ impl Engine {
         game.play(0, r.x, r.y).expect("search returns an empty cell");
         vec![
             format!(
-                "DEBUG depth {} score {} mate {} {} time {}ms",
+                "DEBUG depth {} score {} {} time {}ms",
                 r.depth,
                 r.score,
-                match r.mate_verified {
-                    Some(true) => "verified",
-                    Some(false) => "unverified",
-                    None => "none",
-                },
                 r.stats,
                 r.elapsed.as_millis()
             ),
