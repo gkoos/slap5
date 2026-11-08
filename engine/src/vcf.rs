@@ -7,7 +7,7 @@ use crate::search::MATE;
 use crate::threats;
 use crate::zobrist;
 use crate::Board;
-use std::time::Instant;
+use crate::clock::Instant;
 
 const SLOTS: usize = 1 << 12;
 const BUCKET: usize = 4;

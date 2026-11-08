@@ -271,9 +271,6 @@ pub struct Searcher {
     root_hint: u8,
     stats: Stats,
     pub config: Config,
-    /// The VCF budget for this move: every call the search makes shares it, so the walk is bounded per
-    /// move rather than per call.
-    vcf_budget: vcf::Budget,
 }
 
 impl Default for Searcher {
@@ -499,7 +496,6 @@ impl Searcher {
             root_hint: NO_MOVE,
             stats: Stats::default(),
             config: Config::default(),
-            vcf_budget: vcf::Budget::new(0),
         }
     }
 
