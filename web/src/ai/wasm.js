@@ -3,16 +3,15 @@
 // This replaces the JavaScript engine the page used to load (`ai/engine.js` and the twelve modules under
 // it). The message contract did not change, so `ai/client.js` and the controller did not either - what
 // changed is that the search is now the one the Piskvork binary runs, compiled to wasm.
-import { BOARD_SIZE } from '../core/constants.js';
 import init, { WasmEngine } from '../wasm/slap5_wasm.js';
 import wasmUrl from '../wasm/slap5_wasm_bg.wasm?url';
 import { level } from './difficulty.js';
+import { toMove, words } from './wire.js';
 
 // 2^19 entries of 16 bytes = 8 MB, the same table size the adapter defaults to. Each worker allocates its
 // own, and every cancelled search starts a new worker, so this is deliberately smaller than the engine's
 // native 32 MB.
 const TT_BITS = 19;
-const WORDS = 8;
 
 let module = null;
 
@@ -22,11 +21,6 @@ function load() {
   // what `--omit-default-module-path` in scripts/build-wasm.mjs removes.
   module ??= init({ module_or_path: wasmUrl });
   return module;
-}
-
-/** The adapter reads eight unsigned 32-bit words per colour; the page's bitboards hold signed-ish ones. */
-function words(bitboard) {
-  return Uint32Array.from(bitboard, (word) => word >>> 0);
 }
 
 export function createWasmEngine() {
@@ -56,18 +50,18 @@ export function createWasmEngine() {
         words(position.whiteBitboard),
         position.toMove === 'black',
       );
-      const move = engine.search(timeMs, maxDepth, (depth, x, y) => {
+      const result = engine.search(timeMs, maxDepth, (depth, x, y) => {
         onIteration?.({ depth, move: { row: y, col: x } });
         // Depth is the only progress a time-bounded search can report honestly: an iteration that is
         // still running when the clock stops is discarded, so the bar is "how deep is the move I have".
         onProgress(Math.min(95, Math.round((100 * depth) / maxDepth)));
       });
       onProgress(100);
-      if (!move) return null;
-      const { row, col } = move;
+      if (!result) return null;
+      const move = toMove(result);
       // The result is a wasm allocation owned by JS: read it, then hand it back.
-      move.free();
-      return row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE ? { row, col } : null;
+      result.free();
+      return move;
     },
   };
 }

@@ -24,6 +24,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # `web/test/wasm-engine.test.js` drives the real adapter, so this job needs the wasm target and
+          # the matching CLI; both are the ones the deploy job below uses.
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.129
       - uses: Swatinem/rust-cache@v2
       # The workspace's default members are the engine alone, so this is the engine's 68 tests.
       - run: cargo test
@@ -34,8 +41,11 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
         working-directory: web
-      # The wasm engine itself is not in the loop here: the browser-side bits that can run in Node (the
-      # worker's message contract, the occupancy words, the setup and controller logic) are.
+      # The generated package is gitignored, so without this the adapter's own test would skip.
+      - run: npm run build:wasm
+        working-directory: web
+      # The adapter against the real wasm module, and the browser-side bits that can run in Node (the
+      # worker's message contract, the occupancy words, the setup and controller logic).
       - run: npm test
         working-directory: web
 
