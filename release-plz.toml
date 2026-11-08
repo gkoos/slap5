@@ -6,6 +6,7 @@
 # package the page bundles - so the registry half of release-plz is off.
 [workspace]
 publish = false
+git_only = true          # this crate is not on crates.io: take the version from git, not the registry
 
 # One release, not one per crate. The version is inherited by both members, so without this release-plz
 # would tag `slap5-vX.Y.Z` and `slap5-wasm-vX.Y.Z` and open two releases for the same commit.
