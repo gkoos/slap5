@@ -5,6 +5,7 @@
 use crate::bitboard::{Bits, SIZE, STRIDE};
 use crate::clock::Instant;
 use crate::threats::{self, SHAPES, Shapes};
+use crate::vcf;
 use crate::{Board, Words, eval, zobrist};
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -16,6 +17,9 @@ const MAX_PLY: usize = 256;
 const MATE_BOUND: i32 = MATE - MAX_PLY as i32;
 const NO_MOVE: u8 = 255;
 const DEFAULT_TT_BITS: u32 = 21; // 2^21 entries of 16 bytes = 32 MB
+const VCF_NODES: i32 = 20_000;
+/// Depth the one VCF call per move is given, in plies: half of it is exchanges.
+const VCF_ROOT_DEPTH: i32 = 32;
 
 const TT_MOVE_SCORE: i32 = 1_000_000;
 const KILLER_SCORES: [i32; 2] = [4_000, 3_000];
@@ -42,7 +46,6 @@ pub struct SearchResult {
     /// Whether a reported mate was checked with the table off over its own mate distance. `None` when no
     /// mate was reported, `Some(false)` when the mate was too far away to check inside the turn, which
     /// means it is reported and not proven (see `docs/design-decisions.md`).
-    pub mate_verified: Option<bool>,
     pub stats: Stats,
     pub elapsed: Duration,
 }
@@ -69,6 +72,9 @@ pub struct Config {
     /// The opponent threatens five: the block is its only reply and costs no depth, so the main
     /// search itself follows four chains. This is the forcing play the depth-0 search used to repeat.
     pub free_four_replies: bool,
+    /// The forced-win prover (`vcf`/`no-vcf`): a mate proved by walking fours with every answer
+    /// generated, instead of inherited from a search that prunes what it cannot prove.
+    pub vcf: bool,
     /// The answer to an open three may be a counter-threat of ours, an open three of our own, and not
     /// only a block. Off by default: the wider set scored 19/21 against the default's 20/21 when it was measured.
     /// The only switch, `no-counters`, sets it to this default, so there is no way to turn it on and the
@@ -101,14 +107,6 @@ pub struct Config {
     /// version needs a verification search — cut only if a shallow search still fails low — which this engine
     /// does not have. One ply of depth bought for eight positions lost.
     pub razor: bool,
-    /// A mate no further than this many plies is re-searched with the pruning, the move-count limit and
-    /// the table off, which proves it. Further mates cannot be checked inside a turn and are reported
-    /// unverified instead (switch `verify=N`).
-    pub verify_ply_limit: i32,
-    /// How long that check may take (switch `verify-ms=N`). An exact search with the pruning, the limit and
-    /// the table off is expensive on a busy board, so the check is bounded and a mate it cannot finish is
-    /// reported unverified rather than being trusted.
-    pub verify_ms: u64,
     /// Move-count pruning and late move reductions of quiet moves. Off makes the search exact.
     pub selective: bool,
     /// Move-count pruning of quiet moves past the node's limit. Only meaningful with `selective`.
@@ -137,14 +135,13 @@ impl Default for Config {
             free_three_replies: true,
             extend_three_replies: true,
             free_four_replies: true,
+            vcf: true,
             counter_threes: false,
             strict_bounds: false,
             double_threat_ext: true,
             free_ply_limit: 64,
             razor: false,
             futility: true,
-            verify_ply_limit: 7,
-            verify_ms: 50,
             selective: true,
             limit: true,
             reductions: true,
@@ -168,24 +165,6 @@ impl Config {
                 Err(_) => return false,
             }
         }
-        if let Some(n) = flag.strip_prefix("verify-ms=") {
-            match n.parse::<u64>() {
-                Ok(v) => {
-                    self.verify_ms = v;
-                    return true;
-                }
-                Err(_) => return false,
-            }
-        }
-        if let Some(n) = flag.strip_prefix("verify=") {
-            match n.parse::<i32>() {
-                Ok(v) => {
-                    self.verify_ply_limit = v;
-                    return true;
-                }
-                Err(_) => return false,
-            }
-        }
         match flag {
             "no-tt" => self.use_tt = false,
             "razor" => self.razor = true,
@@ -195,6 +174,8 @@ impl Config {
             "no-threes" => self.free_three_replies = false,
             "no-three-ext" => self.extend_three_replies = false,
             "no-fours" => self.free_four_replies = false,
+                "vcf" => self.vcf = true,
+                "no-vcf" => self.vcf = false,
             "no-counters" => self.counter_threes = false,
             "strict-bounds" => self.strict_bounds = true,
             "no-double" => self.double_threat_ext = false,
@@ -221,9 +202,9 @@ pub struct Stats {
     /// does not count free replies, so this is the figure that can be compared with another engine's
     /// reported depth; the two differ by however long the forcing chains ran.
     pub max_ply: usize,
-    /// Nodes spent inside mate verification searches (see `verify_mate`).
-    pub verify_nodes: u64,
     /// Nodes where the side to move was forced (and so searched without losing depth).
+    /// Nodes spent inside the VCF walk. They are not in `nodes`: the walk counts its own.
+    pub vcf_nodes: u64,
     pub forced_nodes: u64,
     /// Nodes at the horizon (depth 0), where the evaluation starts.
     pub horizon_nodes: u64,
@@ -253,10 +234,10 @@ pub struct Width {
 
 impl std::fmt::Display for Stats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Stats { nodes, max_ply, verify_nodes, forced_nodes, horizon_nodes, cutoffs, first_move_cutoffs, pruned, .. } = self;
+        let Stats { nodes, max_ply, vcf_nodes, forced_nodes, horizon_nodes, cutoffs, first_move_cutoffs, pruned, .. } = self;
         write!(
             f,
-            "nodes {nodes} maxply {max_ply} verify {verify_nodes} forced {forced_nodes} horizon {horizon_nodes} cutoffs {cutoffs} first {first_move_cutoffs} pruned {pruned}"
+            "nodes {nodes} maxply {max_ply} vcf {vcf_nodes} forced {forced_nodes} horizon {horizon_nodes} cutoffs {cutoffs} first {first_move_cutoffs} pruned {pruned}"
         )
     }
 }
@@ -290,6 +271,9 @@ pub struct Searcher {
     root_hint: u8,
     stats: Stats,
     pub config: Config,
+    /// The VCF budget for this move: every call the search makes shares it, so the walk is bounded per
+    /// move rather than per call.
+    vcf_budget: vcf::Budget,
 }
 
 impl Default for Searcher {
@@ -493,19 +477,6 @@ impl Iterator for MoveList {
     }
 }
 
-/// What `Searcher::verify_mate` did with a reported mate.
-enum Verdict {
-    /// The check proved the mate, so the result stands.
-    Agreed,
-    /// The check disagreed: this move and score replace the reported mate, and they are a proof too,
-    /// because that search ran without pruning, without the move-count limit and without the table.
-    Replaced(u8, i32),
-    /// The deadline cut the check short.
-    Incomplete,
-    /// The mate is further away than `verify_ply_limit`, where an exact search cannot finish inside a turn,
-    /// so it is reported without proof.
-    TooLong,
-}
 
 impl Searcher {
     pub fn new() -> Self {
@@ -528,6 +499,7 @@ impl Searcher {
             root_hint: NO_MOVE,
             stats: Stats::default(),
             config: Config::default(),
+            vcf_budget: vcf::Budget::new(0),
         }
     }
 
@@ -538,7 +510,6 @@ impl Searcher {
 
     /// `search`, reporting every completed iteration through `on_iteration` (see `Iterations`) before the
     /// next one starts. The report carries the move that iteration settled on, which for a mate is the one
-    /// `verify_mate` ended with rather than the one the selective search first returned.
     pub fn search_observing(
         &mut self,
         board: &Board,
@@ -551,26 +522,40 @@ impl Searcher {
         if stones as usize == SIZE * SIZE {
             return None;
         }
-        let found = |idx: usize, score: i32, depth: i32, stats: Stats, mate_verified: Option<bool>| SearchResult {
+        let found = |idx: usize, score: i32, depth: i32, stats: Stats| SearchResult {
             x: idx % STRIDE,
             y: idx / STRIDE,
             score,
             depth,
-            mate_verified,
             stats,
             elapsed: start.elapsed(),
         };
         if stones == 0 {
-            return Some(found((SIZE / 2) * STRIDE + SIZE / 2, 0, 0, Stats::default(), None));
+            return Some(found((SIZE / 2) * STRIDE + SIZE / 2, 0, 0, Stats::default()));
         }
         if let Some(i) = board.five_cells(side).pop_lowest() {
             // A five is available now, which is a proof by construction rather than a search result.
-            return Some(found(i, MATE - 1, 1, Stats::default(), Some(true)));
+            return Some(found(i, MATE - 1, 1, Stats::default()));
         }
 
         self.age = self.age.wrapping_add(1);
         self.stats = Stats::default();
         self.stopped = false;
+        self.vcf_budget = vcf::Budget::new(VCF_NODES);
+        // One deliberate VCF per move, at the root, which is where the reference engines put their
+        // decisive logic: a cheap rule test decides the move, and the search handles the rest.
+        if self.config.vcf {
+            let mut root_board = *board;
+            let key = root_board.hash() ^ if side == 1 { zobrist::SIDE } else { 0 };
+            if let Some(score) = vcf::vcf(&mut root_board, side, 0, VCF_ROOT_DEPTH, &mut self.vcf_budget)
+                && let Some((_, _, best)) = self.vcf_budget.probe(key)
+                && best != 0
+            {
+                let idx = best as usize;
+                on_iteration(1, idx % STRIDE, idx / STRIDE, score);
+                return Some(found(idx, score, 1, Stats::default()));
+            }
+        }
         self.deadline = start + limits.time;
         self.killers = [[NO_MOVE; 2]; MAX_PLY];
         for h in self.history.iter_mut().flatten() {
@@ -580,7 +565,6 @@ impl Searcher {
 
         let mut b = *board;
         let mut best = None;
-        let mut mate_verified = None;
         for depth in 1..=limits.max_depth {
             self.plain_iteration = depth == 1;
             let score = self.node(&mut b, side, depth, -INF, INF, 0, stones);
@@ -589,70 +573,20 @@ impl Searcher {
             }
             best = Some((self.root_move, score, depth));
             self.root_hint = self.root_move;
-            let mate = score.abs() >= MATE_BOUND;
-            let mut report = (self.root_move, score);
-            if mate {
-                // A mate stops the iteration loop, so it has to be true. `verify_mate` proves the short
-                // ones; a mate too far away to check is reported as unverified rather than trusted.
-                match self.verify_mate(board, side, depth, score, stones) {
-                    Verdict::Agreed => mate_verified = Some(true),
-                    Verdict::Replaced(mv, verified) => {
-                        best = Some((mv, verified, depth));
-                        self.root_hint = mv;
-                        report = (mv, verified);
-                        mate_verified = Some(true);
-                    }
-                    Verdict::Incomplete | Verdict::TooLong => mate_verified = Some(false),
-                }
-            }
+            let report = (self.root_move, score);
             // One report per completed iteration, issued before either break below so the caller is never
             // missing the move the returned result will carry.
             on_iteration(depth, report.0 as usize % STRIDE, report.0 as usize / STRIDE, report.1);
-            if mate {
+            if score.abs() >= MATE_BOUND {
                 break;
             }
             if start.elapsed() * 2 > limits.time {
                 break;
             }
         }
-        best.map(|(m, s, d)| found(m as usize, s, d, self.stats, mate_verified))
+        best.map(|(m, s, d)| found(m as usize, s, d, self.stats))
     }
 
-    /// Checks a mate the selective search reported, searching its own mate distance (a mate reported at
-    /// depth 9 may be a mate in 3, and an exact search of 9 plies would not finish). The move-count limit,
-    /// the reductions **and the transposition table** are off: a table the selective search filled answers
-    /// this search with the bounds it exists to check — the follow-up audit measured 119 of 120 verification
-    /// nodes coming back as table cutoffs, and with the table on the check cannot fail on the position it
-    /// was written for.
-    fn verify_mate(&mut self, board: &Board, side: usize, depth: i32, score: i32, stones: u32) -> Verdict {
-        let need = (MATE - score.abs()).clamp(1, depth);
-        if need > self.config.verify_ply_limit {
-            return Verdict::TooLong;
-        }
-        let saved = self.config;
-        let saved_deadline = self.deadline;
-        self.config.selective = false;
-        self.config.use_tt = false;
-        // This search has no move limit, so it has to be bounded in time or it would never finish on a
-        // busy board; a mate it cannot finish checking is reported unverified.
-        self.plain_iteration = false;
-        let left = self.deadline.saturating_duration_since(Instant::now());
-        let slice = Duration::from_millis(self.config.verify_ms).min(left / 4);
-        self.deadline = Instant::now() + slice;
-        let before = self.stats.nodes;
-        let mut b = *board;
-        let verified = self.node(&mut b, side, need, -INF, INF, 0, stones);
-        self.stats.verify_nodes += self.stats.nodes - before;
-        self.deadline = saved_deadline;
-        self.config = saved;
-        if self.stopped {
-            return Verdict::Incomplete;
-        }
-        if verified.abs() >= MATE_BOUND && verified.signum() == score.signum() {
-            return Verdict::Agreed;
-        }
-        Verdict::Replaced(self.root_move, verified)
-    }
 
     /// Counts a node and checks the deadline every 1024 nodes; true once the search must stop.
     fn tick(&mut self) -> bool {
@@ -803,6 +737,12 @@ impl Searcher {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// The forced-win prover on a per-node budget: `Some` only for a win the walk has followed.
+    fn prove(&mut self, b: &mut Board, side: usize, ply: usize, depth: i32) -> Option<i32> {
+        let before = self.vcf_budget.nodes;
+        let value = vcf::vcf(b, side, ply, depth, &mut self.vcf_budget); self.stats.vcf_nodes += (before - self.vcf_budget.nodes).max(0) as u64; value
+    }
+
     fn node(&mut self, b: &mut Board, side: usize, depth: i32, mut alpha: i32, beta: i32, ply: usize, stones: u32) -> i32 {
         if self.tick() {
             return 0;
@@ -816,6 +756,7 @@ impl Searcher {
         if !root && let Some(s) = t.decided(ply, stones) {
             return s;
         }
+
 
         // A four against us leaves only its block. Against an open three only its blocks and our own fours
         // are tried, and (with `extend_three_replies`) they cost no depth.
@@ -833,7 +774,8 @@ impl Searcher {
         let free = (extend_three || four_reply) && ply < self.config.free_ply_limit;
         if !root && depth <= 0 && !free {
             self.stats.horizon_nodes += 1;
-            return eval::evaluate_shapes(&shapes, side);
+            let static_eval = eval::evaluate_shapes(&shapes, side);
+            return static_eval;
         }
         if forced {
             self.stats.forced_nodes += 1;
@@ -853,13 +795,13 @@ impl Searcher {
             mv
         };
 
+
         // Mate distance pruning: no score outside (MATE - ply) can matter, so the window closes with the ply.
         alpha = alpha.max(-(MATE - ply as i32));
         let beta = beta.min(MATE - ply as i32 - 1);
         if alpha >= beta {
             return alpha;
         }
-
         // One static score per node, but only where a rule that reads it can fire. All three readers — the
         // horizon return above, the futility checks and the razor — require the node not to be the root, not
         // to be forced and `selective` to be on, and each is off unless its own switch is on, so those are
