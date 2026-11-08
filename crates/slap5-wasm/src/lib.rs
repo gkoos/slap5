@@ -133,7 +133,11 @@ impl WasmEngine {
 }
 
 /// What the page needs from a finished search. The engine's `x` is a column and its `y` a row, which is
-/// the protocol's (x, y) order; the page's board is indexed (row, col), so these getters swap them.
+/// the protocol's (x, y) order; the page's board is indexed (row, col), so these accessors swap them.
+///
+/// They are methods (`move.row()`), not `#[wasm_bindgen(getter)]` properties: the page reads them through
+/// `web/src/ai/wire.js`, so turning one back into a getter is a page whose every finished search resolves
+/// to "no move" - which is what v0.2.0 shipped. `web/test/wasm-engine.test.js` pins the shape.
 #[wasm_bindgen]
 pub struct MoveResult {
     x: usize,
@@ -176,8 +180,7 @@ impl MoveResult {
         self.score
     }
 
-    /// `null` when no mate was reported, `false` when one was reported but was too far away to verify.
-
+    /// Nodes the search spent on this move.
     pub fn nodes(&self) -> u64 {
         self.nodes
     }
