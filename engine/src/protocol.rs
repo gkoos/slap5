@@ -1,4 +1,4 @@
-use crate::bitboard::SIZE;
+use crate::bitboard::{cell, SIZE};
 use crate::game::Game;
 use crate::search::{Limits, Searcher};
 use std::time::Duration;
@@ -40,6 +40,13 @@ fn budget(timeout_turn: Option<u64>, time_left: Option<i64>) -> Duration {
 impl Engine {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Applies one search switch ("no-threes", "cap=16", "wide=6"; see `Config::apply`) and reports whether
+    /// it was one. The engine takes its switches from the command line and from `SLAP5_FLAGS`, so a run can
+    /// vary the search settings without a rebuild (`engine/scripts/match.ps1 -Flags`).
+    pub fn configure(&mut self, flag: &str) -> bool {
+        self.searcher.config.apply(flag)
     }
 
     pub fn finished(&self) -> bool {
@@ -104,7 +111,11 @@ impl Engine {
             return err("not started");
         };
         let limits = Limits { time: budget(self.timeout_turn, self.time_left), max_depth: 100 };
-        let Some(r) = self.searcher.search(game.board(), 0, limits) else {
+        // The moves the game really played, which the root's ordering reads for proximity: without them
+        // the searcher's root has no last move at all, because the search path starts empty there
+        // (item 4.1 of `docs/roadmap.md`).
+        let played: Vec<u8> = game.moves().iter().map(|&(_, x, y)| cell(x, y) as u8).collect();
+        let Some(r) = self.searcher.search_with(game.board(), 0, limits, &played) else {
             return err("board is full");
         };
         game.play(0, r.x, r.y).expect("search returns an empty cell");

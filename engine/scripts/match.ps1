@@ -1,6 +1,9 @@
 # Plays slap5 against another engine with Piskvork's batch mode: each opening is played twice,
 # once with each engine moving first. Results are written to <OutDir>/<opponent>_<time>/.
 # Any running process named pbrain-* is killed after every game (Piskvork leaves engines behind).
+# A game that outlives the match clock by 90s is killed and recorded as `stuck` rather than blocking the
+# run: Piskvork occasionally wedges on an opponent that has exited. Each run also writes slap5-trace.log,
+# a timestamped record of what the engine read and wrote, so which side froze is checkable afterwards.
 param(
     [Parameter(Mandatory)] [string]$Opponent,
     [int]$Pairs = 10,
@@ -10,7 +13,11 @@ param(
     [string]$Engine = "",
     [string]$Piskvork = "",
     [string]$Openings = "",
-    [string]$OutDir = ""
+    [string]$OutDir = "",
+    # Search switches for the engine, space separated ("root-history clustered-tt"; see `Config::apply`).
+    # Passed through the environment, which is how Piskvork starts the engines, so an A/B of switches needs
+    # no rebuild and the run records which settings were in force.
+    [string]$Flags = ""
 )
 $ErrorActionPreference = 'Stop'
 
@@ -45,6 +52,14 @@ New-Item -ItemType Directory -Force $OutDir | Out-Null
 $run = Join-Path (Resolve-Path $OutDir).Path ("{0}_{1:yyyyMMdd_HHmmss}" -f $name, (Get-Date))
 New-Item -ItemType Directory -Force $run | Out-Null
 
+# A timestamped trace of what the engine read and wrote, for telling a frozen engine from a frozen
+# harness. Piskvork passes its environment to the engines it starts, so this reaches slap5 (the
+# third-party opponents ignore it). Unset, the engine writes nothing.
+$env:SLAP5_TRACE = Join-Path $run 'slap5-trace.log'
+# The engine's search switches travel the same way. Cleared rather than set empty, so an inherited value
+# from the calling shell cannot quietly become part of a control run.
+if ($Flags) { $env:SLAP5_FLAGS = $Flags } else { Remove-Item Env:\SLAP5_FLAGS -ErrorAction SilentlyContinue }
+
 # Record what was run: parameters, engine files, the opening list's identity and the repository revision.
 # The openings file's hash is here because the pair indices listed below only identify positions through it:
 # if that file changes, opening 25 in an old run is a different position from opening 25 in a new one, and
@@ -60,13 +75,14 @@ $dirty = @(git -C $repo status --porcelain 2>$null).Count
     "openings hash: $((Get-FileHash $listPath -Algorithm SHA256).Hash.Substring(0, 16)); total openings: $openings"
     "pairs: $Pairs; openings: $((0..($Pairs - 1) | ForEach-Object { ($_ + $OpeningOffset) % $openings }) -join ',')"
     "timeturn_ms: $TimeTurnMs; timematch_s: $TimeMatchS; rule: 0 (freestyle); board size: Piskvork registry"
-    "engine settings: defaults (Config::default)"
+    "engine settings: $(if ($Flags) { $Flags } else { 'defaults (Config::default)' })"
     "revision: $revision; uncommitted files: $dirty"
+    "trace: $env:SLAP5_TRACE"
     "started: $(Get-Date -Format s)"
 ) | Set-Content (Join-Path $run 'run-info.txt')
 
 # Running tally, printed after every game so a long block can be watched while it runs.
-$seen = @{ win = 0; loss = 0; draw = 0; truncated = 0; error = 0 }
+$seen = @{ win = 0; loss = 0; draw = 0; truncated = 0; stuck = 0; error = 0 }
 $rows = foreach ($i in 0..($Pairs - 1)) {
     foreach ($first in 'slap5', 'opponent') {
         $a, $b = if ($first -eq 'slap5') { $engine, $opponent } else { $opponent, $engine }
@@ -76,14 +92,28 @@ $rows = foreach ($i in 0..($Pairs - 1)) {
             '-opening', (($i + $OpeningOffset) % $openings), '-outfile', "`"$psq`"", '-logpipe', "`"$pipeDir`"")
         $p = Start-Process $piskvork -ArgumentList $arguments -WorkingDirectory (Split-Path $piskvork) -PassThru
         $code = -1
-        if ($p.WaitForExit(($TimeMatchS * 2 + 60) * 1000)) { $code = $p.ExitCode } else { $p.Kill() }
+        $stuck = $false
+        # The match clock is per engine, so a legitimate game can spend nearly twice TimeMatchS in wall time;
+        # anything past both allowances plus a margin is a hang - usually Piskvork waiting on an engine that
+        # has already exited. Kill it and record it, instead of blocking for the better part of an hour on a
+        # game that will never finish.
+        $allowance = $TimeMatchS * 2 + 90
+        if ($p.WaitForExit($allowance * 1000)) {
+            $code = $p.ExitCode
+        } else {
+            $stuck = $true
+            $p.Kill()
+            Write-Host ("  stuck: killed after {0}s" -f $allowance)
+        }
         Get-Process -Name 'pbrain-*' -ErrorAction SilentlyContinue | Stop-Process -Force
 
         # Exit codes: 1 first player won, 2 second player won, 3 draw or stopped. A finished draw needs a
         # full board (225 moves); a code 3 with a partial record is the match clock stopping a long game,
-        # which the tally reports as truncated rather than as an error.
+        # which the tally reports as truncated rather than as an error. A stuck game never returned an
+        # exit code at all, so it is its own outcome.
         $moves = if (Test-Path $psq) { @(Get-Content $psq | Where-Object { $_ -match '^\d+,\d+,\d+$' }).Count } else { 0 }
-        $outcome = if ($moves -eq 0 -or $code -notin 1, 2, 3) { 'error' }
+        $outcome = if ($stuck) { 'stuck' }
+        elseif ($moves -eq 0 -or $code -notin 1, 2, 3) { 'error' }
         elseif ($code -eq 3) { if ($moves -eq 225) { 'draw' } else { 'truncated' } }
         elseif (($code -eq 1) -eq ($first -eq 'slap5')) { 'win' }
         else { 'loss' }
@@ -91,7 +121,7 @@ $rows = foreach ($i in 0..($Pairs - 1)) {
         Write-Host ("pair {0} slap5 {1}: {2}" -f $i, $(if ($row.Slap5First) { 'first ' } else { 'second' }), $outcome)
         $seen[$outcome] += 1
         $played = ($seen.Values | Measure-Object -Sum).Sum
-        Write-Host ("  after {0,2} games: {1,2}W {2,2}L {3}D {4}T {5}E" -f $played, $seen.win, $seen.loss, $seen.draw, $seen.truncated, $seen.error)
+        Write-Host ("  after {0,2} games: {1,2}W {2,2}L {3}D {4}T {5}S {6}E" -f $played, $seen.win, $seen.loss, $seen.draw, $seen.truncated, $seen.stuck, $seen.error)
         $row
     }
 }
@@ -101,6 +131,6 @@ $rows = foreach ($i in 0..($Pairs - 1)) {
 if ($Openings -and (Test-Path $openingsBackup)) { Move-Item -Force $openingsBackup $openingsPath }
 
 $rows | Export-Csv -NoTypeInformation (Join-Path $run 'results.csv')
-$tally = { param($rs) '{0}W {1}L {2}D {3}T {4}E' -f @($rs | ? Outcome -eq 'win').Count, @($rs | ? Outcome -eq 'loss').Count, @($rs | ? Outcome -eq 'draw').Count, @($rs | ? Outcome -eq 'truncated').Count, @($rs | ? Outcome -eq 'error').Count }
+$tally = { param($rs) '{0}W {1}L {2}D {3}T {4}S {5}E' -f @($rs | ? Outcome -eq 'win').Count, @($rs | ? Outcome -eq 'loss').Count, @($rs | ? Outcome -eq 'draw').Count, @($rs | ? Outcome -eq 'truncated').Count, @($rs | ? Outcome -eq 'stuck').Count, @($rs | ? Outcome -eq 'error').Count }
 Write-Host "slap5 vs ${name}: $(& $tally $rows)  (as first: $(& $tally ($rows | ? Slap5First)); as second: $(& $tally ($rows | ? { -not $_.Slap5First })))"
 Write-Host "results: $run"

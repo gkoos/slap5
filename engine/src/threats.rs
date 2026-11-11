@@ -20,6 +20,17 @@ pub const TWO: usize = 5;
 /// Number of shape classes.
 pub const SHAPES: usize = 6;
 
+/// The masks the VCF prover needs, and nothing else: the four classes it reads, without the ranked
+/// or per-direction view. `Shapes` builds all six classes per direction and then applies the
+/// precedence; the prover never reads blocked threes or twos, so `vcf_masks` computes only these.
+#[derive(Clone, Copy)]
+pub struct VcfMasks<B: Bits> {
+    pub five: B,
+    pub four: B,
+    pub open_four: B,
+    pub open_three: B,
+}
+
 /// Bit s of `o[j]`/`e[j]` is the own/empty state of the cell j steps after cell s along `d`.
 #[inline(always)]
 fn lines<B: Bits>(own: B, empty: B, d: u32) -> ([B; 6], [B; 6]) {
@@ -112,6 +123,68 @@ fn dir_shapes<B: Bits>(own: B, empty: B, d: u32) -> [B; SHAPES] {
     s
 }
 
+/// The four classes the VCF prover reads along `d`. Shares `lines` with `dir_shapes` and mirrors its
+/// five/four/open-four/open-three windows exactly, but builds neither the blocked-three/two prefix
+/// nor the classes the prover never reads.
+fn dir_vcf_masks<B: Bits>(own: B, empty: B, d: u32) -> VcfMasks<B> {
+    let (o, e) = lines(own, empty, d);
+    let mut m = VcfMasks { five: B::ZERO, four: B::ZERO, open_four: B::ZERO, open_three: B::ZERO };
+
+    // Five: the other four cells of a five-cell window are own.
+    for k in 0..5 {
+        let mut w = e[k];
+        for j in 0..5 {
+            if j != k {
+                w = w.and(o[j]);
+            }
+        }
+        m.five = m.five.or(w.shl(k as u32 * d));
+    }
+
+    // Open four: a six-cell window with empty ends and three own stones among its middle four.
+    for k in 1..5 {
+        let mut w = e[0].and(e[5]).and(e[k]);
+        for j in 1..5 {
+            if j != k {
+                w = w.and(o[j]);
+            }
+        }
+        m.open_four = m.open_four.or(w.shl(k as u32 * d));
+    }
+
+    // Four: a five-cell window with three own stones and two empty cells; playing either empty cell
+    // makes four in a row and leaves one five-completing cell.
+    for k in 0..5 {
+        for hole in 0..5 {
+            if hole == k {
+                continue;
+            }
+            let mut w = e[k].and(e[hole]);
+            for j in 0..5 {
+                if j != k && j != hole {
+                    w = w.and(o[j]);
+                }
+            }
+            m.four = m.four.or(w.shl(k as u32 * d));
+        }
+    }
+
+    // Open three: a six-cell window with empty ends and two own plus two empty middle cells.
+    for k in 1..5 {
+        for l in (k + 1)..5 {
+            let mut w = e[0].and(e[5]).and(e[k]).and(e[l]);
+            for j in 1..5 {
+                if j != k && j != l {
+                    w = w.and(o[j]);
+                }
+            }
+            m.open_three = m.open_three.or(w.shl(k as u32 * d)).or(w.shl(l as u32 * d));
+        }
+    }
+
+    m
+}
+
 /// Every class minus all stronger ones, so a cell belongs to one class per direction.
 fn precedence<B: Bits>(mut s: [B; SHAPES]) -> [B; SHAPES] {
     let mut stronger = s[FIVE];
@@ -169,6 +242,20 @@ fn union<B: Bits>(own: B, empty: B, class: usize) -> B {
     let mut res = B::ZERO;
     for d in DIRS {
         res = res.or(dir_shapes(own, empty, d)[class]);
+    }
+    res
+}
+
+/// Union over the four directions of the four classes the VCF prover reads. One pass per direction
+/// instead of one per class, so the shifted stone/empty masks are built once for all four.
+pub fn vcf_masks<B: Bits>(own: B, empty: B) -> VcfMasks<B> {
+    let mut res = VcfMasks { five: B::ZERO, four: B::ZERO, open_four: B::ZERO, open_three: B::ZERO };
+    for d in DIRS {
+        let m = dir_vcf_masks(own, empty, d);
+        res.five = res.five.or(m.five);
+        res.four = res.four.or(m.four);
+        res.open_four = res.open_four.or(m.open_four);
+        res.open_three = res.open_three.or(m.open_three);
     }
     res
 }
