@@ -138,7 +138,7 @@ pub struct Config {
     /// 2026-11-11**, as one of a three-item bundle that was measured as a pool, not item by item: over
     /// KANEC, pela, Tito and carbon it scored 55.7% against the same build's 46.9%, ahead on all four and
     /// behind on none (the twelve frozen Gomocup openings, four pairs each, both colours,
-    /// `logs/night-summary.md`).
+    /// `docs/roadmap.md` item 4).
     pub root_history: bool,
     /// Wider candidate radius in the opening (`wide-openings`): while fewer than `wide_stones` stones are
     /// on the board the search generates radius 3 instead of 2. The reference engines widen near the root
