@@ -17,7 +17,7 @@ default-members = ["engine"]
 # protocol (`ABOUT`), and `web/vite.config.js` reads this file to stamp the page. A release bumps this one
 # line: `release-plz` does it from the conventional commits and writes CHANGELOG.md in the same pull request.
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 # Edition 2024 needs 1.85. Nothing here is published, so this is informational.
 rust-version = "1.85"
