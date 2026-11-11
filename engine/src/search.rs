@@ -22,6 +22,10 @@ const VCF_NODES: i32 = 20_000;
 const VCF_ROOT_DEPTH: i32 = 32;
 
 const TT_MOVE_SCORE: i32 = 1_000_000;
+/// Entries per table bucket when `Config::clustered_tt` is on: four-way, so one bucket index serves the
+/// entries of four positions instead of one. The table keeps its size - the bucket index simply drops the
+/// low bits - so this trades entries per bucket for collisions between different positions.
+const CLUSTER: usize = 4;
 const KILLER_SCORES: [i32; 2] = [4_000, 3_000];
 const HISTORY_DIVISOR: i32 = 32;
 /// History values are halved once one passes this.
@@ -126,6 +130,50 @@ pub struct Config {
     pub null_move: bool,
     /// Plies taken off the null-move search, on top of the one ply the pass itself costs.
     pub null_reduction: i32,
+    /// Root-aware history (`root-history`): the root's move ordering reads the moves the game really
+    /// played, instead of the search path, which is empty at the root and so leaves the proximity rule
+    /// inert exactly where the opponent's last move is known (item 4.1 of `docs/roadmap.md`). Ordering
+    /// only, so its equivalence gate is the exact search: an ordering cannot change a value that the
+    /// exact search would return (`root_history_cannot_change_an_exact_score`). **On by default since
+    /// 2026-11-11**, as one of a three-item bundle that was measured as a pool, not item by item: over
+    /// KANEC, pela, Tito and carbon it scored 55.7% against the same build's 46.9%, ahead on all four and
+    /// behind on none (the twelve frozen Gomocup openings, four pairs each, both colours,
+    /// `logs/night-summary.md`).
+    pub root_history: bool,
+    /// Wider candidate radius in the opening (`wide-openings`): while fewer than `wide_stones` stones are
+    /// on the board the search generates radius 3 instead of 2. The reference engines widen near the root
+    /// for the same reason, and our opening play starts narrower than theirs without it (item 4.2 of
+    /// `docs/roadmap.md`). The stone count bounds the change by itself - every ply adds a stone - so this
+    /// reaches the first few plies of a position only, root and replies alike. It changes which moves
+    /// exist, so its gate is the suite and a pool, not an identity check. **On by default since
+    /// 2026-11-11**, as part of the same three-item bundle (`root-history` has the pool's numbers); it was
+    /// not measured alone, and in this pool it can only bite in the openings with fewer than five stones,
+    /// so the bundle's result is mostly the other two items.
+    pub wide_openings: bool,
+    /// The stone count below which `wide_openings` widens the radius (command line `wide=<n>`); **5** is
+    /// the figure the reference notes give: "while fewer than five stones are on the board".
+    pub wide_stones: u32,
+    /// Clustered transposition table (`clustered-tt`): four entries per bucket instead of one, and a store
+    /// replaces the shallowest entry in the bucket rather than only ever its own slot, which is what keeps
+    /// a same-age entry belonging to another position whole (item 5 of `docs/roadmap.md`, where the earlier
+    /// audit measured that as a cost). The table is the same size either way. A table is a cache of known
+    /// bounds, so this can never change an exact score; the gate is that identity, and the effect is speed,
+    /// so it is adopted only if it shows up as depth. **On by default since 2026-11-11**, as part of the
+    /// same three-item bundle (`root-history` has the pool's numbers); not measured alone.
+    pub clustered_tt: bool,
+    /// Aspiration windows (`aspiration`): after the first iteration the root is searched in a window around
+    /// the previous iteration's score and the window is widened until the value falls inside it, which is
+    /// cheaper than the full window when the ordering is good. It cannot change an exact score, and the
+    /// gate `aspiration_cannot_change_an_exact_score` holds that over the table on and off and windows of 1,
+    /// 50 and above full width - but it **costs two of the suite's 21 positions**, reproducibly:
+    /// `Tito-p00_opponent_first` and `PentaZen-p00_opponent_first`, which are exactly the two positions the
+    /// whole bundle would lose. The mechanism is the pruning, not the value: futility, the move-count limit
+    /// and the reductions are all measured against `alpha`, so a narrower window prunes more and can drop
+    /// the move that saves the position. **Off by default and out of the bundle**; it needs a verification
+    /// search, or a suite run in exact mode, before it is worth measuring again.
+    pub aspiration: bool,
+    /// The first aspiration window's half-width in centi-eval units (command line `asp=<n>`).
+    pub aspiration_delta: i32,
 }
 
 impl Default for Config {
@@ -149,6 +197,12 @@ impl Default for Config {
             iir: false,
             null_move: true,
             null_reduction: 2,
+            root_history: true,
+            wide_openings: true,
+            wide_stones: 5,
+            clustered_tt: true,
+            aspiration: false,
+            aspiration_delta: 50,
         }
     }
 }
@@ -160,6 +214,24 @@ impl Config {
             match n.parse::<usize>() {
                 Ok(v) => {
                     self.free_ply_limit = v;
+                    return true;
+                }
+                Err(_) => return false,
+            }
+        }
+        if let Some(n) = flag.strip_prefix("wide=") {
+            match n.parse::<u32>() {
+                Ok(v) => {
+                    self.wide_stones = v;
+                    return true;
+                }
+                Err(_) => return false,
+            }
+        }
+        if let Some(n) = flag.strip_prefix("asp=") {
+            match n.parse::<i32>() {
+                Ok(v) => {
+                    self.aspiration_delta = v;
                     return true;
                 }
                 Err(_) => return false,
@@ -188,6 +260,14 @@ impl Config {
             "no-iir" => self.iir = false,
             "null-move" => self.null_move = true,
             "no-null-move" => self.null_move = false,
+            "root-history" => self.root_history = true,
+            "no-root-history" => self.root_history = false,
+            "wide-openings" => self.wide_openings = true,
+            "no-wide-openings" => self.wide_openings = false,
+            "clustered-tt" => self.clustered_tt = true,
+            "no-clustered-tt" => self.clustered_tt = false,
+            "aspiration" => self.aspiration = true,
+            "no-aspiration" => self.aspiration = false,
             _ => return false,
         }
         true
@@ -259,11 +339,18 @@ pub struct Searcher {
     killers: [[u8; 2]; MAX_PLY],
     /// The move played at each ply of the current line.
     path: [u8; MAX_PLY],
+    /// The moves the game really played before this search, oldest first, at most four of them. The
+    /// root's ordering reads these; the path cannot supply them, because at ply 0 it is empty (see
+    /// `Config::root_history`).
+    root_recent: [u8; 4],
+    root_recent_len: usize,
     history: [[i32; 256]; 2],
     /// The first iteration: untimed, and without free plies or the leaf search, so it is cheap and always completes.
     plain_iteration: bool,
     stopped: bool,
     deadline: Instant,
+    /// The VCF walk's budget and table, kept across turns so the 256 KiB table is allocated once.
+    vcf_budget: vcf::Budget,
     /// How many null moves are on the current path. A pass is only tried when there are none, so the search
     /// cannot be built out of free moves.
     nulls: u32,
@@ -487,6 +574,8 @@ impl Searcher {
             age: 0,
             killers: [[NO_MOVE; 2]; MAX_PLY],
             path: [NO_MOVE; MAX_PLY],
+            root_recent: [NO_MOVE; 4],
+            root_recent_len: 0,
             history: [[0; 256]; 2],
             plain_iteration: true,
             stopped: false,
@@ -496,12 +585,35 @@ impl Searcher {
             root_hint: NO_MOVE,
             stats: Stats::default(),
             config: Config::default(),
+            vcf_budget: vcf::Budget::new(VCF_NODES),
         }
+    }
+
+    /// Records the moves the game has played, so the root's ordering can read them. The last four, in
+    /// oldest-first order, which is the window `recent_at` uses at the root.
+    fn set_root_recent(&mut self, played: &[u8]) {
+        let tail = &played[played.len().saturating_sub(4)..];
+        self.root_recent = [NO_MOVE; 4];
+        self.root_recent[..tail.len()].copy_from_slice(tail);
+        self.root_recent_len = tail.len();
     }
 
     /// Best move for `side` to move, or None if the board is full.
     pub fn search(&mut self, board: &Board, side: usize, limits: Limits) -> Option<SearchResult> {
-        self.search_observing(board, side, limits, &mut |_, _, _, _| {})
+        self.search_with_observing(board, side, limits, &[], &mut |_, _, _, _| {})
+    }
+
+    /// `search`, told the moves the game has already played: cell indices (`bitboard::cell`), oldest
+    /// first. The root's ordering reads the last few of them for proximity, which the search path cannot
+    /// supply, because at the root it is empty (see `Config::root_history`).
+    pub fn search_with(
+        &mut self,
+        board: &Board,
+        side: usize,
+        limits: Limits,
+        played: &[u8],
+    ) -> Option<SearchResult> {
+        self.search_with_observing(board, side, limits, played, &mut |_, _, _, _| {})
     }
 
     /// `search`, reporting every completed iteration through `on_iteration` (see `Iterations`) before the
@@ -513,6 +625,19 @@ impl Searcher {
         limits: Limits,
         on_iteration: Iterations<'_>,
     ) -> Option<SearchResult> {
+        self.search_with_observing(board, side, limits, &[], on_iteration)
+    }
+
+    /// `search_observing`, told the moves the game has already played (see `search_with`).
+    pub fn search_with_observing(
+        &mut self,
+        board: &Board,
+        side: usize,
+        limits: Limits,
+        played: &[u8],
+        on_iteration: Iterations<'_>,
+    ) -> Option<SearchResult> {
+        self.set_root_recent(played);
         let start = Instant::now();
         let stones = board.stone_count();
         if stones as usize == SIZE * SIZE {
@@ -544,12 +669,14 @@ impl Searcher {
         if self.config.vcf {
             let mut root_board = *board;
             let key = root_board.hash() ^ if side == 1 { zobrist::SIDE } else { 0 };
-            let mut budget = vcf::Budget::new(VCF_NODES).with_deadline(self.deadline);
-            let before = budget.nodes;
-            let won = vcf::vcf(&mut root_board, side, 0, VCF_ROOT_DEPTH, &mut budget);
-            self.stats.vcf_nodes += (before - budget.nodes).max(0) as u64;
+            // The table is reused between turns; resetting it clears the previous turn's entries and
+            // the counters, so a later position sees the same table an allocation would have given it.
+            self.vcf_budget.reset(VCF_NODES);
+            self.vcf_budget.set_deadline(self.deadline);
+            let won = vcf::vcf(&mut root_board, side, 0, VCF_ROOT_DEPTH, &mut self.vcf_budget);
+            self.stats.vcf_nodes += self.vcf_budget.visited.max(0) as u64;
             if let Some(score) = won
-                && let Some((_, _, best)) = budget.probe(key)
+                && let Some((_, _, best)) = self.vcf_budget.probe(key)
             {
                 let idx = best as usize;
                 on_iteration(1, idx % STRIDE, idx / STRIDE, score);
@@ -564,13 +691,36 @@ impl Searcher {
 
         let mut b = *board;
         let mut best = None;
+        let mut previous = 0;
         for depth in 1..=limits.max_depth {
             self.plain_iteration = depth == 1;
-            let score = self.node(&mut b, side, depth, -INF, INF, 0, stones);
+            // Aspiration window (`aspiration`): after the first iteration the root is searched in a window
+            // around the previous score, widened until the value falls inside it - cheaper than the full
+            // window when the ordering is good. A value from outside the window is never used: the
+            // iteration is re-searched wider, so the returned score is the full window's.
+            let score = if self.config.aspiration && depth > 1 {
+                let mut delta = self.config.aspiration_delta.clamp(1, INF);
+                loop {
+                    let (lo, hi) = (previous - delta, previous + delta);
+                    let s = self.node(&mut b, side, depth, lo, hi, 0, stones);
+                    if self.stopped || (s > lo && s < hi) {
+                        break s;
+                    }
+                    delta = delta.saturating_mul(2);
+                    if delta >= INF {
+                        // The widening has reached the full window, so this pass is the full search. The
+                        // guard is here so that a mistake cannot leave this loop without a final pass.
+                        break self.node(&mut b, side, depth, -INF, INF, 0, stones);
+                    }
+                }
+            } else {
+                self.node(&mut b, side, depth, -INF, INF, 0, stones)
+            };
             if self.stopped {
                 break;
             }
             best = Some((self.root_move, score, depth));
+            previous = score;
             self.root_hint = self.root_move;
             let report = (self.root_move, score);
             // One report per completed iteration, issued before either break below so the caller is never
@@ -596,21 +746,40 @@ impl Searcher {
         self.stopped
     }
 
+    /// The bucket for `key`: its first index and its length. One entry per bucket by default, `CLUSTER`
+    /// with `Config::clustered_tt`, where the bucket index drops the low bits so the table keeps its size.
+    #[inline]
+    fn bucket(&self, key: u64) -> (usize, usize) {
+        if !self.config.clustered_tt {
+            return (key as usize & self.mask, 1);
+        }
+        (key as usize & self.mask & !(CLUSTER - 1), CLUSTER)
+    }
+
     /// A stored score that settles the node, and the stored best move (`NO_MOVE` if none).
     fn probe_tt(&self, key: u64, depth: i32, alpha: i32, beta: i32, ply: usize) -> (Option<i32>, u8) {
-        let e = self.tt[key as usize & self.mask];
-        if !self.config.use_tt || e.bound == 0 || e.key != key {
+        if !self.config.use_tt {
             return (None, NO_MOVE);
         }
-        let s = from_tt(e.score as i32, ply);
-        let settles = e.depth as i32 >= depth
-            && match e.bound {
-                EXACT => true,
-                LOWER => s >= beta,
-                UPPER => s <= alpha,
-                _ => false,
-            };
-        (settles.then_some(s), e.mv)
+        let (base, n) = self.bucket(key);
+        for i in base..base + n {
+            let e = self.tt[i];
+            if e.bound == 0 || e.key != key {
+                continue;
+            }
+            let s = from_tt(e.score as i32, ply);
+            let settles = e.depth as i32 >= depth
+                && match e.bound {
+                    EXACT => true,
+                    LOWER => s >= beta,
+                    UPPER => s <= alpha,
+                    _ => false,
+                };
+            // A key has one entry at most: a store replaces the entry of its own key, so the first match
+            // in the bucket is the only one.
+            return (settles.then_some(s), e.mv);
+        }
+        (None, NO_MOVE)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -632,12 +801,40 @@ impl Searcher {
             EXACT
         };
         let age = self.age;
-        let slot = &mut self.tt[key as usize & self.mask];
-        if slot.bound != 0 && slot.age == age && (depth as i8) < slot.depth {
-            return;
-        }
+        let (base, n) = self.bucket(key);
+        let target = if n == 1 {
+            // One entry per bucket: this key's slot is the only slot, and a same-age deeper entry in it is
+            // kept whole - the rule the table had before clustering, kept separate so that a table with the
+            // switch off behaves exactly as it always did.
+            let e = self.tt[base];
+            if e.bound != 0 && e.age == age && (depth as i8) < e.depth {
+                return;
+            }
+            base
+        } else {
+            // Clustered: this key's own entry when the bucket holds one, else the shallowest, and among
+            // equals the oldest - which is also what an empty slot is (depth 0, age 0), so an unused entry
+            // is taken before a real one.
+            let mut target = base;
+            for i in base..base + n {
+                let e = self.tt[i];
+                if e.key == key && e.bound != 0 {
+                    if e.age == age && (depth as i8) < e.depth {
+                        return;
+                    }
+                    target = i;
+                    break;
+                }
+                let t = self.tt[target];
+                if e.depth < t.depth || (e.depth == t.depth && e.age < t.age) {
+                    target = i;
+                }
+            }
+            target
+        };
+        let slot = self.tt[target];
         let mv = if mv == NO_MOVE && slot.key == key { slot.mv } else { mv };
-        *slot = Entry { key, score: to_tt(score, ply) as i16, mv, depth: depth as i8, bound, age };
+        self.tt[target] = Entry { key, score: to_tt(score, ply) as i16, mv, depth: depth as i8, bound, age };
     }
 
     /// Orders candidates by the shape class they make, strongest first.
@@ -657,7 +854,8 @@ impl Searcher {
             (shapes.cells(side, threats::TWO), 2_000),
         ];
         let killers = self.killers[ply];
-        let recent = &self.path[ply.saturating_sub(4)..ply];
+        let (recent_buf, recent_len) = self.recent_at(ply);
+        let recent = &recent_buf[..recent_len];
         let mut list = MoveList { moves: [Move::default(); SIZE * SIZE], len: 0, next: 0 };
         for i in cand.bits() {
             let cell = i as u8;
@@ -688,10 +886,28 @@ impl Searcher {
         list
     }
 
+    /// The moves proximity is measured against at `ply`: the path's own last four, or - at the root,
+    /// where the path is empty and every candidate would read as "not far" - the moves the game really
+    /// played (see `Config::root_history`). Returned by value so the caller needs no allocation.
+    #[inline]
+    fn recent_at(&self, ply: usize) -> ([u8; 4], usize) {
+        if ply == 0 && self.config.root_history {
+            return (self.root_recent, self.root_recent_len);
+        }
+        let mut out = [NO_MOVE; 4];
+        let mut n = 0;
+        for p in ply.saturating_sub(4)..ply {
+            out[n] = self.path[p];
+            n += 1;
+        }
+        (out, n)
+    }
+
     #[allow(dead_code)]
     fn order_moves(&self, scores: &Scores, cand: Words, side: usize, tt_move: u8, ply: usize) -> MoveList {
         let killers = self.killers[ply];
-        let recent = &self.path[ply.saturating_sub(4)..ply];
+        let (recent_buf, recent_len) = self.recent_at(ply);
+        let recent = &recent_buf[..recent_len];
         let mut list = MoveList { moves: [Move::default(); SIZE * SIZE], len: 0, next: 0 };
         for i in cand.bits() {
             let cell = i as u8;
@@ -876,6 +1092,10 @@ impl Searcher {
             } else {
                 counters
             }
+        } else if self.config.wide_openings && stones < self.config.wide_stones {
+            // The opening radius. The same stone-count bound the reference uses, and since every ply adds
+            // a stone it reaches the first few plies of a position by itself, root and replies alike.
+            b.candidates_within(3)
         } else {
             b.candidates()
         };

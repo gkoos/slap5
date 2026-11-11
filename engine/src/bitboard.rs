@@ -4,6 +4,13 @@ use crate::zobrist;
 
 pub const SIZE: usize = 15;
 pub const STRIDE: usize = 16;
+
+/// The cell index of `(x, y)`: the stride-times-`y` layout the masks and the search's move indices use.
+/// The protocol's coordinates and a search result's `(x, y)` are converted with this and its inverse.
+#[inline]
+pub const fn cell(x: usize, y: usize) -> usize {
+    y * STRIDE + x
+}
 pub const DIRS: [u32; 4] = [1, 16, 15, 17];
 
 pub trait Bits: Copy {
@@ -224,9 +231,17 @@ impl<B: Bits> Board<B> {
         self.stones[0].count_ones() + self.stones[1].count_ones()
     }
 
-    /// Empty cells within distance 2 (any direction) of a stone.
+    /// Empty cells within distance 2 (any direction) of a stone: the search's default candidate set.
     #[inline]
     pub fn candidates(&self) -> B {
+        self.candidates_within(2)
+    }
+
+    /// Empty cells within `r` king-move steps of a stone: `r = 1` the neighbours, 2 the default, 3 the
+    /// wider set the opening uses (`Config::wide_openings`). Each step is the eight-neighbour dilation
+    /// with the board mask applied, so the cost is one mask operation per layer.
+    #[inline]
+    pub fn candidates_within(&self, r: usize) -> B {
         // Masking after each step stops the guard column from wrapping a stone onto the next row.
         let grow = |x: B| {
             x.or(x.shl(1))
@@ -239,6 +254,10 @@ impl<B: Bits> Board<B> {
                 .or(x.shr(17))
                 .and(self.valid)
         };
-        grow(grow(self.stones[0].or(self.stones[1]))).and(self.empty())
+        let mut x = self.stones[0].or(self.stones[1]);
+        for _ in 0..r {
+            x = grow(x);
+        }
+        x.and(self.empty())
     }
 }

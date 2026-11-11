@@ -107,6 +107,26 @@ fn candidates_match_brute_force<B: Bits>() {
             }
         }
         assert_eq!(got, want, "stones {stones:?}");
+        // The opening radius is the same dilation repeated: 1 the neighbours, 3 the wider set
+        // `Config::wide_openings` asks for. Checked against the same brute force so a shift or a mask
+        // error in the loop cannot pass as "wider".
+        for radius in 1..=3 {
+            let mut mask = b.candidates_within(radius);
+            let mut got = Vec::new();
+            while let Some(i) = mask.pop_lowest() {
+                got.push((i / bitboard::STRIDE, i % bitboard::STRIDE));
+            }
+            let mut want = Vec::new();
+            for r in 0..SIZE {
+                for c in 0..SIZE {
+                    let near = stones.iter().any(|&(sr, sc)| r.abs_diff(sr).max(c.abs_diff(sc)) <= radius);
+                    if near && !stones.contains(&(r, c)) {
+                        want.push((r, c));
+                    }
+                }
+            }
+            assert_eq!(got, want, "radius {radius}, stones {stones:?}");
+        }
     }
 }
 

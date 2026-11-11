@@ -306,6 +306,149 @@ fn iir_is_counted_and_does_not_lose_a_mate() {
     assert!(on.stats.iir_nodes > 0, "the reduction fired: {} nodes", on.stats.iir_nodes);
 }
 
+// The root's proximity window reads the moves the game really played when the switch is on. Without it
+// the root's window is the search path and that is empty at the root, so the proximity rule cannot see
+// the opponent's last move at all (item 4.1 of `docs/roadmap.md`).
+#[test]
+fn root_history_move_window_reads_the_played_moves() {
+    let b = board(&[(0, 7, 7), (1, 7, 8)]);
+    let played = [crate::bitboard::cell(7, 7) as u8, crate::bitboard::cell(8, 7) as u8];
+    let mut on = searcher_with(|c| c.root_history = true);
+    on.search_with(&b, 0, limits(1), &played).unwrap();
+    assert_eq!(on.root_recent_len, 2);
+    assert_eq!(&on.root_recent[..2], &played, "the played moves, oldest first");
+    assert_eq!(on.recent_at(0).1, 2, "the root reads the played moves");
+    // Deeper plies keep reading the path, which the switch does not touch.
+    assert_eq!(on.recent_at(2).0[0], on.path[0], "ply 2 reads the path's first move");
+    let mut off = searcher_with(|c| c.root_history = false);
+    off.search_with(&b, 0, limits(1), &played).unwrap();
+    assert_eq!(off.root_recent_len, 2, "recorded either way");
+    assert_eq!(off.recent_at(0).1, 0, "and unused with the switch off");
+    // Four is the window the rule reads, so a longer game keeps only its last four moves.
+    let many: Vec<u8> = (0..6).map(|i| crate::bitboard::cell(i, 0) as u8).collect();
+    let mut s = searcher_with(|c| c.root_history = true);
+    s.search_with(&b, 0, limits(1), &many).unwrap();
+    assert_eq!(&s.root_recent[..s.root_recent_len], &many[2..], "the last four, oldest first");
+}
+
+// Root-aware history is ordering only, and that is testable: with the search made exact - no table, no
+// selective pruning, no free plies, no null move - the value of a position cannot depend on the order
+// its moves are tried, so the switch must leave a fixed-depth score alone. This is the equivalence gate
+// the roadmap asks for; a proximity rule that changed a value would show up here.
+#[test]
+fn root_history_cannot_change_an_exact_score() {
+    // `board` takes (player, y, x), the order `Board::make` uses; a cell index is cell(x, y).
+    let stones = [(0, 7, 7), (1, 7, 8), (0, 8, 8), (1, 8, 7), (0, 6, 6), (1, 8, 6)];
+    let b = board(&stones);
+    let played: Vec<u8> = stones.iter().map(|&(_, y, x)| crate::bitboard::cell(x, y) as u8).collect();
+    for depth in 1..=4 {
+        let mut off = plain(|c| c.null_move = false);
+        let mut on = plain(|c| {
+            c.null_move = false;
+            c.root_history = true;
+        });
+        let a = off.search_with(&b, 0, limits(depth), &played).unwrap();
+        let z = on.search_with(&b, 0, limits(depth), &played).unwrap();
+        assert_eq!(a.score, z.score, "depth {depth}: the exact score changed");
+    }
+}
+
+// The opening radius has to reach the search and not only the board: with the switch on, a position with
+// fewer stones than the bound generates more candidates, and one past the bound generates the same number
+// - the stone count is what bounds the change, so nothing in the mid-game can be affected by it.
+#[test]
+fn wide_openings_widens_the_candidate_set_only_below_the_bound() {
+    let candidates = |stones: &[(usize, usize, usize)], wide: bool| {
+        let mut s = plain(|c| c.wide_openings = wide);
+        let r = s.search(&board(stones), 0, limits(3)).unwrap();
+        let mut total = 0u64;
+        for f in 0..2 {
+            for t in 0..2 {
+                for c in 0..2 {
+                    for d in 0..9 {
+                        total += r.stats.width[f][t][c][d].candidates;
+                    }
+                }
+            }
+        }
+        total
+    };
+    let early = [(0, 7, 7), (1, 7, 8), (0, 8, 8)];
+    assert!(candidates(&early, true) > candidates(&early, false), "three stones: the radius adds candidates");
+    let later = [(0, 7, 7), (1, 7, 8), (0, 8, 8), (1, 8, 7), (0, 6, 6), (1, 8, 6)];
+    assert_eq!(candidates(&later, true), candidates(&later, false), "past the bound: unchanged");
+}
+
+// The cluster's whole point, directly: two keys that share a bucket index, which the table tells apart only
+// by keeping both. The keys differ above the mask on purpose, so both land on the same slot when clustering
+// is off - that is the collision the cluster exists to survive.
+#[test]
+fn clustered_tt_keeps_four_entries_per_bucket() {
+    let a = 0x1234_5678_9ABC_DEF0u64;
+    let b = a ^ (1 << 40);
+    let store = |s: &mut Searcher, key: u64, score: i32, mv: u8| {
+        s.store_tt(key, 3, score, -INF, INF, mv, 0, false);
+    };
+    let mut flat = searcher_with(|c| c.clustered_tt = false);
+    store(&mut flat, a, 100, 7);
+    store(&mut flat, b, 200, 9);
+    assert_eq!(flat.probe_tt(a, 3, -INF, INF, 0), (None, NO_MOVE), "one entry: the first key is gone");
+    assert_eq!(flat.probe_tt(b, 3, -INF, INF, 0), (Some(200), 9));
+    let mut clustered = searcher_with(|c| c.clustered_tt = true);
+    store(&mut clustered, a, 100, 7);
+    store(&mut clustered, b, 200, 9);
+    assert_eq!(clustered.probe_tt(a, 3, -INF, INF, 0), (Some(100), 7), "the bucket holds both");
+    assert_eq!(clustered.probe_tt(b, 3, -INF, INF, 0), (Some(200), 9));
+}
+
+// A table holds bounds on positions, nothing more, so losing entries can only cost a re-search and never a
+// value. That is the equivalence gate the roadmap asks for and the reason this item is speed: with the
+// search otherwise exact, clustering cannot move a fixed-depth score.
+#[test]
+fn clustered_tt_cannot_change_an_exact_score() {
+    let stones = [(0, 7, 7), (1, 7, 8), (0, 8, 8), (1, 8, 7), (0, 6, 6), (1, 8, 6)];
+    let b = board(&stones);
+    for depth in 1..=5 {
+        let mut flat = plain(|c| c.use_tt = true);
+        let mut clustered = plain(|c| {
+            c.use_tt = true;
+            c.clustered_tt = true;
+        });
+        let a = flat.search(&b, 0, limits(depth)).unwrap();
+        let z = clustered.search(&b, 0, limits(depth)).unwrap();
+        assert_eq!(a.score, z.score, "depth {depth}: the exact score changed");
+    }
+}
+
+// Aspiration windows are a window and not a rule: the score the root reports has to be the full window's, so
+// with the search otherwise exact the switch cannot move a fixed-depth score. A delta of 1 forces the
+// widening to run many times, which is what makes this a test of the re-search rather than of a first pass,
+// and the table is tried on and off because a narrow pass stores bounds a wider pass has to respect.
+#[test]
+fn aspiration_cannot_change_an_exact_score() {
+    let stones = [(0, 7, 7), (1, 7, 8), (0, 8, 8), (1, 8, 7), (0, 6, 6), (1, 8, 6)];
+    let b = board(&stones);
+    for use_tt in [false, true] {
+        for delta in [1, 50, 100_000] {
+            for depth in 1..=5 {
+                let mut off = plain(|c| {
+                    c.use_tt = use_tt;
+                    c.aspiration = false;
+                    c.aspiration_delta = delta;
+                });
+                let mut on = plain(|c| {
+                    c.use_tt = use_tt;
+                    c.aspiration = true;
+                    c.aspiration_delta = delta;
+                });
+                let a = off.search(&b, 0, limits(depth)).unwrap();
+                let z = on.search(&b, 0, limits(depth)).unwrap();
+                assert_eq!(a.score, z.score, "tt {use_tt}, delta {delta}, depth {depth}: the score changed");
+            }
+        }
+    }
+}
+
 // Null-move pruning must not lose a mate that the same search finds without it, and it has to fire somewhere;
 // the counter is the only way a log can see the pass being tried.
 #[test]

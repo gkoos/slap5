@@ -453,3 +453,47 @@ fn a_double_four_counts_twice() {
     one[7][3] = 2;
     assert_eq!(dirs(&board::<Words>(&one).shapes()), 1);
 }
+
+// The VCF-only kernel must answer exactly what the four union functions answer, for both players and
+// both word types. It builds only four classes and no precedence, so this is the check that the
+// shortcut did not change a mask.
+fn vcf_kernel_matches_union<B: Bits>() {
+    let mut rng = Rng(0x2545_F491_4F6C_DD1D);
+    let mut seen = [0u32; 4];
+    for _ in 0..1500 {
+        let g = random_grid(&mut rng);
+        let b = board::<B>(&g);
+        let empty = b.empty();
+        for player in 0..2 {
+            let own = b.stones[player];
+            let m = vcf_masks(own, empty);
+            let want = [
+                five_cells(own, empty),
+                four_cells(own, empty),
+                open_four_cells(own, empty),
+                open_three_cells(own, empty),
+            ];
+            assert_eq!(m.five.words(), want[0].words(), "five on {g:?}");
+            assert_eq!(m.four.words(), want[1].words(), "four on {g:?}");
+            assert_eq!(m.open_four.words(), want[2].words(), "open four on {g:?}");
+            assert_eq!(m.open_three.words(), want[3].words(), "open three on {g:?}");
+            for (i, w) in want.iter().enumerate() {
+                seen[i] += !w.is_zero() as u32;
+            }
+        }
+    }
+    for (i, n) in seen.iter().enumerate() {
+        assert!(*n >= 100, "class {i} was non-empty in only {n} positions; generator too weak");
+    }
+}
+
+#[test]
+fn scalar_words_vcf_kernel_matches_union() {
+    vcf_kernel_matches_union::<U64x4>();
+}
+
+#[test]
+fn default_words_vcf_kernel_matches_union() {
+    vcf_kernel_matches_union::<Words>();
+}
+

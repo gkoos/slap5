@@ -3,11 +3,11 @@
 //! returns the best move as well as the value, and only ever a win for a sequence walked to a five.
 
 use crate::bitboard::{Bits, STRIDE};
+use crate::clock::Instant;
 use crate::search::MATE;
 use crate::threats;
 use crate::zobrist;
-use crate::Board;
-use crate::clock::Instant;
+use crate::{Board, Words};
 
 const SLOTS: usize = 1 << 12;
 const BUCKET: usize = 4;
@@ -20,17 +20,33 @@ struct Entry {
     depth: i8,
 }
 
+/// An empty table slot. Buckets are scanned for a matching key, so a zero key is never stored.
+const EMPTY: Entry = Entry { key: 0, best: 0, dist: 0, depth: -1 };
+
 /// What the walk may spend, and what it remembers.
 pub struct Budget {
+    /// The budget still to spend, in nodes.
     pub nodes: i32,
+    /// Nodes the walk actually entered, counted apart from the budget so a deadline cut is not
+    /// reported as the whole budget spent (see `spend`).
+    pub visited: i32,
     deadline: Option<Instant>,
     entries: Vec<Entry>,
 }
 
 impl Budget {
     pub fn new(nodes: i32) -> Self {
-        let empty = Entry { key: 0, best: 0, dist: 0, depth: -1 };
-        Budget { nodes, deadline: None, entries: vec![empty; SLOTS * BUCKET] }
+        Budget { nodes, visited: 0, deadline: None, entries: vec![EMPTY; SLOTS * BUCKET] }
+    }
+
+    /// Resets the counters and clears the table for a fresh turn. Reusing one `Budget` across turns
+    /// saves the table allocation; clearing it keeps an entry from one turn from reaching the next,
+    /// which would otherwise reach a later position and change an equivalence benchmark.
+    #[inline]
+    pub fn reset(&mut self, nodes: i32) {
+        self.entries.fill(EMPTY);
+        self.nodes = nodes;
+        self.visited = 0;
     }
 
     #[inline]
@@ -42,7 +58,14 @@ impl Budget {
     }
 
     #[inline]
+    /// Sets the deadline on an existing budget, for a table reused across turns (see `reset`).
+    pub fn set_deadline(&mut self, deadline: Instant) {
+        self.deadline = Some(deadline);
+    }
+
+    #[inline]
     fn spend(&mut self) -> bool {
+        self.visited += 1;
         if self.nodes & 1023 == 0 && let Some(d) = self.deadline && Instant::now() >= d {
             self.nodes = 0;
         }
@@ -83,7 +106,9 @@ pub fn vcf(b: &mut Board, side: usize, ply: usize, depth: i32, budget: &mut Budg
     walk(b, side, ply, depth, true, budget)
 }
 
-/// `wide` is true only at the top: a non-root node is cut to two attacker moves.
+/// `wide` is true only at the top: a non-root node is cut to two attacker moves. The masks come from
+/// `threats::vcf_masks`, which builds the four classes the prover reads in one pass per direction,
+/// rather than the per-class generation that rebuilt all six classes for each one.
 fn walk(b: &mut Board, side: usize, ply: usize, depth: i32, wide: bool, budget: &mut Budget) -> Option<i32> {
     if !budget.spend() || depth <= 0 {
         return None;
@@ -99,15 +124,14 @@ fn walk(b: &mut Board, side: usize, ply: usize, depth: i32, wide: bool, budget: 
         }
         stored = best;
     }
-    let own = b.stones[side];
-    let empty = b.empty();
-    if !threats::five_cells(own, empty).is_zero() {
+    // `five` proves the node; `open_four` and `four` are the candidate set, all from one pass.
+    let m = threats::vcf_masks(b.stones[side], b.empty());
+    if !m.five.is_zero() {
         return Some(MATE - ply as i32 - 1);
     }
-    // Their gate: a blocked three exists. Ours adds fours and open threes, which the walk can use.
-    // Candidate fours, the table move first, then open fours before blocked ones.
-    let open = threats::open_four_cells(own, empty);
-    let blocked = threats::four_cells(own, empty).and(open.not());
+    // Candidate fours: the table move first, then open fours before blocked ones.
+    let open = m.open_four;
+    let blocked = m.four.and(open.not());
     let mut cells: Vec<usize> = open.bits().chain(blocked.bits()).collect();
     if stored != 0 {
         let want = stored as usize;
@@ -125,24 +149,19 @@ fn walk(b: &mut Board, side: usize, ply: usize, depth: i32, wide: bool, budget: 
         }
         let (r, c) = (cell / STRIDE, cell % STRIDE);
         b.make(side, r, c);
-        // Only a four that is a double four, or also makes a three (open or blocked), is walked.
-        let after = b.stones[side];
-        let after_empty = b.empty();
-        if threats::four_cells(after, after_empty).is_zero()
-            && threats::open_three_cells(after, after_empty).is_zero()
-            && threats::five_cells(after, after_empty).count_ones() < 2
-        {
+        let ma = threats::vcf_masks(b.stones[side], b.empty());
+        let five_after = ma.five;
+        if five_after.count_ones() < 2 && ma.four.is_zero() && ma.open_three.is_zero() {
             b.unmake(side, r, c);
             continue;
         }
-        let value = answer(b, side, ply, depth, budget);
+        let value = answer(b, side, ply, depth, five_after, budget);
         b.unmake(side, r, c);
         if let Some(v) = value {
             budget.store(key, cell as u8, (MATE - v - ply as i32) as u16, depth);
             return Some(v);
         }
     }
-    // Nothing here at this depth, and the budget did not run out: that is worth remembering.
     if budget.nodes > 0 {
         budget.store(key, 0, 0, depth);
     }
@@ -150,25 +169,22 @@ fn walk(b: &mut Board, side: usize, ply: usize, depth: i32, wide: bool, budget: 
 }
 
 /// The position after our four: the opponent is to move and their only non-losing answers are the
-/// cells that complete it for us.
-fn answer(b: &mut Board, side: usize, ply: usize, depth: i32, budget: &mut Budget) -> Option<i32> {
+/// cells that complete it for us. `completions` is our five mask, already built by the caller.
+fn answer(b: &mut Board, side: usize, ply: usize, depth: i32, completions: Words, budget: &mut Budget) -> Option<i32> {
     let opp = 1 - side;
     let empty = b.empty();
     if !threats::five_cells(b.stones[opp], empty).is_zero() {
         return None;
     }
-    let completions = threats::five_cells(b.stones[side], empty);
     if completions.count_ones() >= 2 {
         return Some(MATE - ply as i32 - 3);
     }
     let cell = completions.bits().next()?;
     let (r, c) = (cell / STRIDE, cell % STRIDE);
     b.make(opp, r, c);
-    let value = if b.wins(opp) {
-        None
-    } else {
-        walk(b, side, ply + 2, depth - 2, false, budget)
-    };
+    // The defender's block cannot win: `cell` is on board and empty, and their five mask was empty
+    // (checked just above), so occupying it cannot complete a five for them.
+    let value = walk(b, side, ply + 2, depth - 2, false, budget);
     b.unmake(opp, r, c);
     value
 }
