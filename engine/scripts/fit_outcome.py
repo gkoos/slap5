@@ -65,7 +65,9 @@ def read_outcomes(run):
 
 def build_corpus(root, dump_bin):
     """Every position of every recorded game that has a result, labelled from the mover's side."""
-    runs = [d for d in glob.glob(os.path.join(root, "*", "*")) if glob.glob(os.path.join(d, "*.psq"))]
+    # Recursive: a run is wherever the .psq files are - one level (logs/<run>), two (logs/<leg>/<run>) or
+    # deeper (logs/pool-chain/<opponent>/<run>) - so find the files and keep the directories that hold them.
+    runs = sorted({os.path.dirname(p) for p in glob.glob(os.path.join(root, "**", "*.psq"), recursive=True)})
     rows = []
     for run in sorted(runs):
         outcomes = read_outcomes(run)

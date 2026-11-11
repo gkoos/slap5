@@ -88,25 +88,31 @@ fn main() {
     let stride: usize = args.get(1).and_then(|a| a.parse().ok()).unwrap_or(1);
     let min_ply: usize = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(6);
 
-    let mut files: Vec<_> = std::fs::read_dir(&dir)
-        .expect("run directory")
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        // Both a run directory and a directory of run directories: the outcome corpus is built one run at a
-        // time, because two runs of the same leg reuse the .psq names.
-        .flat_map(|p| {
-            if p.is_dir() {
-                std::fs::read_dir(p).into_iter().flatten().filter_map(|e| e.ok()).map(|e| e.path()).collect()
-            } else {
-                vec![p]
+    // A run is a directory of `.psq` files, and the input is either one run or a directory of runs. One run
+    // keeps bare stems, so a reader keyed by `(name, ply)` sees the names its results.csv uses (this is what
+    // `fit_outcome.py` dumps, one run at a time). A directory of runs prefixes the run's own directory name,
+    // because every run reuses names like `p00_slap5_first` and a reader would otherwise overwrite one run's
+    // rows with another's.
+    let mut files: Vec<(String, std::path::PathBuf)> = Vec::new();
+    for entry in std::fs::read_dir(&dir).expect("run directory").filter_map(|e| e.ok()) {
+        let p = entry.path();
+        if p.is_dir() {
+            let run = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            for f in std::fs::read_dir(&p).into_iter().flatten().filter_map(|e| e.ok()) {
+                let f = f.path();
+                if f.extension().map(|x| x == "psq").unwrap_or(false) {
+                    files.push((run.clone(), f));
+                }
             }
-        })
-        .filter(|p| p.extension().map(|x| x == "psq").unwrap_or(false))
-        .collect();
+        } else if p.extension().map(|x| x == "psq").unwrap_or(false) {
+            files.push((String::new(), p));
+        }
+    }
     files.sort();
 
-    for path in files {
-        let name = path.file_stem().unwrap().to_string_lossy().to_string();
+    for (run, path) in files {
+        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+        let name = if run.is_empty() { stem } else { format!("{run}/{stem}") };
         let Ok(text) = std::fs::read_to_string(&path) else { continue };
         let mut board = Board::new();
         let mut stones: Vec<(usize, usize, usize)> = Vec::new();

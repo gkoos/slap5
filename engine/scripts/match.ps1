@@ -93,15 +93,17 @@ $rows = foreach ($i in 0..($Pairs - 1)) {
         $p = Start-Process $piskvork -ArgumentList $arguments -WorkingDirectory (Split-Path $piskvork) -PassThru
         $code = -1
         $stuck = $false
-        # The match clock bounds a game, so anything past it plus a margin is a hang - usually Piskvork
-        # waiting on an engine that has already exited. Kill it and record it, instead of blocking for
-        # the better part of an hour on a game that will never finish.
-        if ($p.WaitForExit(($TimeMatchS + 90) * 1000)) {
+        # The match clock is per engine, so a legitimate game can spend nearly twice TimeMatchS in wall time;
+        # anything past both allowances plus a margin is a hang - usually Piskvork waiting on an engine that
+        # has already exited. Kill it and record it, instead of blocking for the better part of an hour on a
+        # game that will never finish.
+        $allowance = $TimeMatchS * 2 + 90
+        if ($p.WaitForExit($allowance * 1000)) {
             $code = $p.ExitCode
         } else {
             $stuck = $true
             $p.Kill()
-            Write-Host ("  stuck: killed after {0}s" -f ($TimeMatchS + 90))
+            Write-Host ("  stuck: killed after {0}s" -f $allowance)
         }
         Get-Process -Name 'pbrain-*' -ErrorAction SilentlyContinue | Stop-Process -Force
 

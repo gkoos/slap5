@@ -31,7 +31,13 @@ foreach ($row in $rows) {
     $inp.Add('START 15'); $inp.Add("INFO timeout_turn $TimeTurnMs"); $inp.Add('INFO timeout_match 600000')
     $inp.Add('INFO max_memory 83886080'); $inp.Add('BOARD')
     foreach ($s in $stoneText.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)) {
-        if ($s -match '^(\d+):(\d+),(\d+)$') { $inp.Add(('{0},{1},{2}' -f $Matches[2], $Matches[3], ([int]$Matches[1] + 1))) }
+        if ($s -match '^(\d+):(\d+),(\d+)$') {
+            # BOARD's owner field is relative to the receiving engine - 1 is its own stone, 2 the opponent's -
+            # and the label has to be the *mover's* evaluation, so the side to move gets owner 1. Writing the
+            # board's player number instead asked Rapfi to evaluate the wrong side on every `us=1` row.
+            $owner = if ([int]$Matches[1] -eq $us) { 1 } else { 2 }
+            $inp.Add(('{0},{1},{2}' -f $Matches[2], $Matches[3], $owner))
+        }
     }
     $inp.Add('DONE')
     $inp | Set-Content -Encoding ascii $in

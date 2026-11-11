@@ -753,7 +753,11 @@ impl Searcher {
         if !self.config.clustered_tt {
             return (key as usize & self.mask, 1);
         }
-        (key as usize & self.mask & !(CLUSTER - 1), CLUSTER)
+        let base = key as usize & self.mask & !(CLUSTER - 1);
+        // Clamped to what was allocated: `with_table_bits(0)` and `(1)` are one and two entries, and a
+        // four-entry bucket on them would index past the vector. `base` is at most `mask`, so the clamp
+        // always leaves at least one entry.
+        (base, CLUSTER.min(self.tt.len() - base))
     }
 
     /// A stored score that settles the node, and the stored best move (`NO_MOVE` if none).

@@ -342,11 +342,19 @@ fn root_history_cannot_change_an_exact_score() {
     let b = board(&stones);
     let played: Vec<u8> = stones.iter().map(|&(_, y, x)| crate::bitboard::cell(x, y) as u8).collect();
     for depth in 1..=4 {
-        let mut off = plain(|c| c.null_move = false);
+        let mut off = plain(|c| {
+            c.null_move = false;
+            // Named rather than inherited: the default is now true, so a control that took it from
+            // `Config::default()` would compare the setting against itself and prove nothing.
+            c.root_history = false;
+        });
         let mut on = plain(|c| {
             c.null_move = false;
             c.root_history = true;
         });
+        // The arms have to differ in the switch, or the comparison above is empty. This fails loudly if a
+        // later default flip turns the test green and meaningless instead.
+        assert!(!off.config.root_history && on.config.root_history, "the arms both took the default");
         let a = off.search_with(&b, 0, limits(depth), &played).unwrap();
         let z = on.search_with(&b, 0, limits(depth), &played).unwrap();
         assert_eq!(a.score, z.score, "depth {depth}: the exact score changed");
@@ -409,14 +417,36 @@ fn clustered_tt_cannot_change_an_exact_score() {
     let stones = [(0, 7, 7), (1, 7, 8), (0, 8, 8), (1, 8, 7), (0, 6, 6), (1, 8, 6)];
     let b = board(&stones);
     for depth in 1..=5 {
-        let mut flat = plain(|c| c.use_tt = true);
+        let mut flat = plain(|c| {
+            c.use_tt = true;
+            // Named rather than inherited, for the same reason as the root-history gate above: the default
+            // is now true, and an inherited control would make this a comparison of a setting with itself.
+            c.clustered_tt = false;
+        });
         let mut clustered = plain(|c| {
             c.use_tt = true;
             c.clustered_tt = true;
         });
+        // As in the root-history gate: a control that took the default would pass while testing nothing.
+        assert!(!flat.config.clustered_tt && clustered.config.clustered_tt, "the arms both took the default");
         let a = flat.search(&b, 0, limits(depth)).unwrap();
         let z = clustered.search(&b, 0, limits(depth)).unwrap();
         assert_eq!(a.score, z.score, "depth {depth}: the exact score changed");
+    }
+}
+
+// A table smaller than a cluster still has to work: `with_table_bits(0)` and `(1)` allocate one and two
+// entries, and a four-entry bucket on them would index past the vector. A tiny table is useless but it has
+// to be sound, and it is a public constructor.
+#[test]
+fn clustered_bucket_is_clamped_to_a_small_table() {
+    let b = board(&[(0, 7, 7), (1, 7, 8), (0, 8, 8), (1, 8, 7)]);
+    for bits in 0..=3 {
+        let mut s = Searcher::with_table_bits(bits);
+        s.config.clustered_tt = true;
+        let r = s.search(&b, 0, limits(4)).unwrap();
+        assert!(r.stats.nodes > 0, "bits {bits}: the search ran");
+        assert!(b.empty().get(crate::bitboard::cell(r.x, r.y)), "bits {bits}: the move is an empty cell");
     }
 }
 
