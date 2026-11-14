@@ -166,11 +166,38 @@ A clustered bucket - several entries, replace the shallowest or the oldest - is 
 
 **Its own criterion was not met, and that is recorded rather than hidden.** This section said to adopt only if the cluster shows up as depth; the ply gate reads a mean 5.76 to 5.81 over the suite with one position gaining a ply, which is not a ply of its own. It came in as the third item of the bundle in item 4 and was carried by that pool and by the suite, not by a depth gain it can claim alone.
 
+**Table size, 13 November 2026.** The table is sized from `INFO max_memory`: the largest power of two of 16-byte entries under the limit less a 16 MiB reserve, so Gomocup's 1 GiB gives 2^25 entries (512 MiB). `tt-mb=N` asks for a size and is still capped by the limit; without either the table stays at 32 MiB. The reserve rests on the engine's USS, which is what GomocupJudge measures after every move: about 1 MiB besides the table, and a 512 MiB table adds about 80 ms to the first reply. **A larger table bought nothing measurable:**
+
+- Nodes to depth 7 on the 21 suite positions (`tt_probe`): 64.3 M at 2^21, 91.2 M at 2^23, 55.6 M at 2^25. Not monotonic: only positions whose trees exceed the table differ, in both directions, because a different table makes a different tree, so this cannot separate capacity from that. At depth 3 every size gives identical counts.
+- The suite at 1000 and 5000 ms gives the same results and depths with 32 and 512 MiB (21/21 and 20/21). The 5000 ms failure, `PentaZen-p07_slap5_first`, is depth 6 choosing a losing move at either size.
+- Four real games replayed with one table across each game at 10 s per move (`tt_replay`): 32 MiB evicts 35-58% of its stores, 512 MiB at most 1.3%, yet mean completed depth over 71 moves is 4.83 against 4.84 and the hit rate barely moves. The 512 MiB table searched 3.4% fewer nodes in the same time.
+- GomocupJudge, 1 s per move, the frozen openings with both colours against kanec, pela, carbon, Tito and PentaZen, 120 games per arm: 52W 64L 4D with 32 MiB, 49W 66L 5D with 512 MiB. 2.5 games apart, against a standard error of about 6 points.
+
+Published chess measurements put the gain at about 3 to 14 Elo per doubling once the table is saturated (talkchess, "Effect of the Hash Table size", 2013-2014), which for 32 to 512 MiB is 10 to 50 Elo, below what 120-game runs resolve. The size follows the limit.
+
 ## 6. Time management
 
 The deadline is the full move budget (`self.deadline = start + limits.time`); there is no half-budget reservation in the current code, and the older claim that there was one was written against an earlier revision. What is still open is small but free: does the root loop start an iteration it cannot finish, and is the budget spent evenly across a game? Answer it with per-move elapsed times and `Stats`, not with a rating test. Anything more elaborate - extending on score drop or move instability - is a match question, and at 1 s per move it is likely to be noise.
 
 **Answered on 11 November 2026, from records that already existed.** `logs/time-probe.ps1` reads the elapsed time and `Stats` back out of the engine's own trace logs, and over 6101 real moves from two pela runs the root loop **does** start iterations it cannot finish - about 40% of moves spend the budget right up to the deadline - but the time is not wasted: the aborted iteration's tree stays in the table, which the next move inherits, and the reported depth is always the last completed iteration. The budget is spent evenly (median 75% used, min 0% on positions decided without a search, max 100.4% where the 50 ms spare absorbed the 1024-node tick granularity), and `timeout_turn` is a hard per-move cap in Piskvork, so there is no unspent budget to reallocate. **No change follows.** A rule that skipped an iteration it cannot finish would leave budget on the table and lose the table warming; the only live part of this item is reliability rather than strength.
+
+**Time management, 12-14 November 2026.** `engine/src/time.rs` (switch `time`, on by default; `no-time` is the earlier `min(timeout_turn, time_left/10) - 50 ms`) gives `min(timeout_turn, (time_left - 10 s)/7) - 50 ms`, floored at 20 ms: the Carbon and Piskvork-brain divisor with PentaZen's 10 s reserve. Matched pools at Gomocup's Freestyle15 clock, 30 s per move and 180 s per match, the frozen openings four times over with both colours, 96 games per arm (pela, carbon and Wine under Piskvork; Tito under GomocupJudge with the 32 MiB table; kanec 24 games on Piskvork's openings at 30 s / 120 s):
+
+| Opponent (Freestyle15 Elo) | `time` | `no-time` | won only with `time` / only without |
+|---|---|---|---|
+| kanec (1478) | 17W 7L | 16W 8L | 5 / 4 |
+| pela (1549) | 69W 23L 4T | 77W 14L 5T | 12 / 20 |
+| carbon (1624) | 52W 44L | 58W 37L 1T | 14 / 20 |
+| Tito (1764) | 41W 53L 2D | 37W 57L 2D | 24 / 20 |
+| Wine (1853) | 22W 63L (86 games both arms finished) | 15W 70L | 15 / 8 |
+
+Fitted against the opponents' Freestyle15 ratings: `time` 1695 ± 18, `no-time` 1697 ± 19. **Equal overall.** `no-time` did better against pela and carbon and `time` against Tito and Wine, none significant on its own (at most 1.5 standard deviations on the paired games), and the split by opponent strength was drawn after seeing the results. Only 75-87 of each 96 games are distinct, because a repeated opening partly replays the same game.
+
+**Where thinking time changes the move** (`time_curve`, 300 positions from the 1 s GomocupJudge games, one 30 s search each with every iteration recorded, Rapfi's move at 10 s as the reference, the 114 positions the search already calls a forced win or loss left out): agreement with Rapfi is 49.5% at 0.25 s and 54.3% at 30 s over 186 positions. Early and late positions are flat within about ±6 points; middle positions go from 50% to 62.5% on 40 positions. The move itself changes between 0.25 s and 30 s in about 40% of positions, so extra time mostly trades one move for another that Rapfi does not prefer either. Agreement is coarse - a position can have several good moves - and would not show extra time avoiding blunders.
+
+**Iteration stability**, from the same searches: once the best move has held for four iterations, the last iteration inside 30 s plays a different move in 2.5% of 473 cases; after one, two and three iterations, 68.5%, 43.8% and 24.5%. A rule that stops once the move has held for four iterations is supported by this and not built.
+
+**Cost.** One opponent's pair of arms at 30 s / 180 s takes about ten hours played one game at a time. Further comparisons need parallel games (`judge.ps1 -Clients`), the two arms playing each other, and a rule that stops when the result is clear; only the first exists.
 
 ## 7. Opening selection for pools
 

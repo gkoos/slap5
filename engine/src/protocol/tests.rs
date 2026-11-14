@@ -94,13 +94,22 @@ fn plays_the_winning_move() {
 }
 
 #[test]
-fn time_budget() {
-    assert_eq!(budget(Some(1000), None), Duration::from_millis(950));
-    assert_eq!(budget(None, None), Duration::from_millis(950));
-    assert_eq!(budget(Some(0), None), Duration::from_millis(20));
-    assert_eq!(budget(Some(1000), Some(2000)), Duration::from_millis(150));
-    assert_eq!(budget(Some(1000), Some(-500)), Duration::from_millis(20));
-    assert_eq!(budget(Some(1000), Some(2_147_483_647)), Duration::from_millis(950));
+fn legacy_time_budget() {
+    assert_eq!(legacy_budget(Some(1000), None), Duration::from_millis(950));
+    assert_eq!(legacy_budget(None, None), Duration::from_millis(950));
+    assert_eq!(legacy_budget(Some(0), None), Duration::from_millis(20));
+    assert_eq!(legacy_budget(Some(1000), Some(2000)), Duration::from_millis(150));
+    assert_eq!(legacy_budget(Some(1000), Some(-500)), Duration::from_millis(20));
+    assert_eq!(legacy_budget(Some(1000), Some(2_147_483_647)), Duration::from_millis(950));
+}
+
+#[test]
+fn time_management_switch() {
+    let mut e = Engine::new();
+    assert!(e.configure("time"));
+    assert!(e.searcher.config.time_management);
+    assert!(e.configure("no-time"));
+    assert!(!e.searcher.config.time_management);
 }
 
 #[test]
@@ -112,4 +121,23 @@ fn misc_commands() {
     assert!(!e.finished());
     assert!(e.handle("END").is_empty());
     assert!(e.finished());
+}
+
+#[test]
+fn table_size_follows_max_memory_and_tt_mb() {
+    let mut e = Engine::new();
+    assert_eq!(e.wanted_table_bits(), None, "no limit and no switch keeps the default table");
+    e.handle("INFO max_memory 1073741824");
+    assert_eq!(e.wanted_table_bits(), Some(25), "1 GiB less the reserve: 2^25 entries, 512 MiB");
+    e.handle("INFO max_memory 1048576000");
+    assert_eq!(e.wanted_table_bits(), Some(25));
+    e.handle("INFO max_memory 73400320");
+    assert_eq!(e.wanted_table_bits(), Some(21), "70 MiB, Gomocup's floor, leaves 54 MiB: 32 MiB of table");
+    e.handle("INFO max_memory 0");
+    assert_eq!(e.wanted_table_bits(), None, "0 is no limit");
+    assert!(e.configure("tt-mb=128"));
+    assert_eq!(e.wanted_table_bits(), Some(23));
+    e.handle("INFO max_memory 134217728");
+    assert_eq!(e.wanted_table_bits(), Some(22), "the switch is capped by the limit less the reserve: 112 MiB");
+    assert!(!e.configure("tt-mb=0") && !e.configure("tt-mb=x"));
 }

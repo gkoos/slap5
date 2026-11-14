@@ -4,7 +4,7 @@
 
 ![Slap5 screenshot of the web demo](Screenshot.png)
 
-Slap5 is a roughly 1600-Elo freestyle Gomoku (five-in-a-row) engine written in Rust. It uses principal variation search, tactical threat analysis and selective pruning, and runs both natively and in your browser through WebAssembly. Play against it online or challenge it through the [Gomocup](http://www.gomocup.org/) protocol in [piskvork](https://github.com/plastovicka/Piskvork).
+Slap5 is a freestyle Gomoku (five-in-a-row) engine written in Rust, rated about 1700 on Gomocup's Freestyle15 scale (1695 ± 18, fitted from 408 games at Gomocup's 30 s per move against five rated engines; see `docs/roadmap.md` item 6). It uses principal variation search, tactical threat analysis and selective pruning, and runs both natively and in your browser through WebAssembly. Play against it online or in [Piskvork](https://github.com/plastovicka/Piskvork) through the [Gomocup](http://www.gomocup.org/) protocol; its matches are played under [GomocupJudge](https://github.com/Gomocup/GomocupJudge), the referee Gomocup itself runs.
 
 ## Build and test
 
@@ -65,9 +65,23 @@ Delete the key to restore the default (20×20). Batch mode (`piskvork.exe -p <en
 
 ## Matches
 
+Matches are played under [GomocupJudge](https://github.com/Gomocup/GomocupJudge), the referee Gomocup runs, checked out next to this repository (`../GomocupJudge`; Python 3.8+ with `psutil` and `paramiko`):
+
+```
+engine/scripts/judge.ps1 -Opponent <engine.exe> [<engine2.exe> ...] [-Count 0] [-TimeTurnMs 1000] [-TimeMatchMs 600000] [-MemoryBytes 1073741824] [-Clients 1] [-Flags "<switches>"] [-Engine <path>] [-Openings <file>]
+```
+
+slap5 plays every opponent on every opening of the list (the frozen Gomocup 2026 set by default; `-Count N` takes the first N) with both colours, under the tournament's conditions: a new engine process per game, the side not to move suspended, the per-move limit plus tolerance, and memory measured as USS after every move. `-Clients N` plays N games at once, each client pinned to its own core. Each run is one directory under `logs/judge_*`: the Judge's own records and BayesElo output (`server/result/run/`: `_result.txt`, `ratings.txt`, `los.txt`, one `.psq` per game), `slap5-trace.log`, `run-info.txt`, and one `vs_<opponent>/` directory per opponent in the same layout as `match.ps1` below (`results.csv`, `pNN_slap5_first.psq` / `pNN_opponent_first.psq`, `pbrain-slap5.exe.log`), which `loss_probe.py` reads unchanged. "First" there means black. The Elo is relative to the pool (its average is 1600) and is not comparable with Gomocup's rating list.
+
+The Judge starts engines with its own environment and tells them apart by checksum, so switches do not travel through `SLAP5_FLAGS` there: `-Flags` writes them into `slap5-settings.txt` next to the executable inside slap5's zip, together with the trace path. The engine reads that file at startup after its command line and `SLAP5_FLAGS`.
+
+### Piskvork (earlier runs)
+
 ```
 engine/scripts/match.ps1 -Opponent <engine.exe> [-Pairs 10] [-TimeTurnMs 1000] [-OpeningOffset 0] [-TimeMatchS 600] [-Engine <path>] [-Openings <file>]
 ```
+
+Every run in `logs/` before 13 November 2026 was played this way. Piskvork keeps one engine process across games and measures memory differently, so its runs are not pooled with Judge runs.
 
 Plays each of Piskvork's openings twice, once with each engine moving first, prints a win/loss/draw/truncated/error tally and writes the game records, pipe logs and a `run-info.txt` (parameters, the openings file and its hash, the list of opening indices used, engine hash and repository revision) under `logs/`. The openings file's hash is what makes the indices comparable across runs: the index is only a position through that file, so a run recorded against a different `openings.txt` must not be pooled with it — `engine/scripts/loss_probe.py` reports the lists it finds and warns when a corpus mixes them. `-Openings engine\openings\gomocup-freestyle15-2026.txt` plays a run on the frozen measurement set instead of Piskvork's 41 openings: the 12 openings of Gomocup 2026's freestyle 15x15 league, read off the diagrams Gomocup publishes (it publishes no coordinates) by `engine/scripts/openings_from_png.py`. That file is copied into Piskvork's directory for the run, because Piskvork reads `openings.txt` from its own folder and takes no option for another file, and the original is put back afterwards. In the same registry key, set `autoBegin` to 1 (otherwise Piskvork ignores openings in batch mode) and `openingRandomShift1` to 0 (so both games of a pair get the same opening). The script kills every running `pbrain-*` process after each game, so run one match at a time. `-OpeningOffset` selects held-out openings; `-Engine` compares a second build (for an A/B, build the old revision in a `git worktree`). A game stopped by the match clock is reported as `truncated`, not as an error. Openings used for a big match are recorded and not used again for tuning. Use `external\pela\pbrain-pela.exe` as the second opponent - that is the build the rating refers to. Piskvork's bundled `external\piskvork\bin\pbrain-pela.exe` is a different, much smaller build of the same version string and must not be used for measurement. `docs/design-decisions.md` records how changes are measured.
 
@@ -85,6 +99,14 @@ Runs the engine on 21 positions taken from games it lost to Tito and PentaZen (`
 
 The suite is 20 unique tactical positions from earlier losses, labelled by a prover that is not in this repository, so it is a fast regression signal and not a measure of playing strength; strength is judged by matches on held-out openings.
 
+The suite also takes `tt-bits=N` (table of 2^N entries), `only=<name>` (one position, printing every completed iteration), `after=x,y` (play our move first and search the reply) and `depth=N` (cap the depth). Switches added on 13 November 2026: `time` / `no-time` (the move budget of `engine/src/time.rs`, on by default, or the earlier `time_left/10` rule) and `tt-mb=N` (the table size asked for, still capped by `INFO max_memory`).
+
+Measurement tools added on 13 November 2026, their findings in `docs/roadmap.md` items 5 and 6:
+
+- `cargo run --release --example tt_probe -- <depth> <bits>...`: nodes to a fixed depth on the suite positions for several table sizes, with no clock.
+- `cargo run --release --example tt_replay -- <openings file> <ms> <bits,bits> <game.psq>...`: replays recorded games with one table kept across the game and reports depth, table hits and evictions per table size.
+- `engine/scripts/time_curve.py` with `cargo run --release --example time_curve`: samples positions from recorded games, searches each once for a long time recording every iteration, asks Rapfi for its move, and reports agreement with Rapfi per budget and game phase, and how often a best move that has held for k iterations still changes.
+
 ## Layout
 
 - `engine/src/bitboard.rs`, `engine/src/avx.rs`: board representation
@@ -93,9 +115,13 @@ The suite is 20 unique tactical positions from earlier losses, labelled by a pro
 - `engine/src/eval.rs`: static evaluation
 - `engine/src/search.rs`: the search
 - `engine/src/game.rs`, `engine/src/protocol.rs`, `engine/src/main.rs`: game state and Piskvork protocol
+- `engine/src/time.rs`: the per-move time budget
 - `engine/src/clock.rs`: the monotonic clock (`std` on native, the host's `performance.now()` on wasm32)
-- `engine/scripts/match.ps1`: plays matches against other engines
+- `engine/scripts/judge.ps1`: plays matches against other engines under GomocupJudge
+- `engine/scripts/match.ps1`: plays matches against other engines under Piskvork (earlier runs)
 - `engine/examples/suite.rs`, `engine/examples/last_chance.txt`: position suite
+- `engine/examples/tt_probe.rs`, `engine/examples/tt_replay.rs`: table-size measurements
+- `engine/examples/time_curve.rs`, `engine/scripts/time_curve.py`: how the move changes with thinking time
 - `crates/slap5-wasm/`: the browser adapter (wasm-bindgen): occupancy words in, moves and iteration reports out
 - `web/`: the browser demo built on that adapter, deployed to GitHub Pages
 - `web/scripts/build-wasm.mjs`: builds the adapter and post-processes it into `web/src/wasm/`
