@@ -7,6 +7,7 @@ pub mod game;
 pub mod protocol;
 pub mod search;
 pub mod threats;
+pub mod time;
 pub mod vcf;
 pub mod zobrist;
 

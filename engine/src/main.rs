@@ -39,8 +39,35 @@ fn flags<I: IntoIterator<Item = String>>(args: I, env: Option<String>) -> Vec<St
     out
 }
 
+/// The file next to the executable that carries a build's settings when the environment cannot: GomocupJudge
+/// starts every engine with its own environment and tells engines apart by checksum, so two arms of an A/B
+/// are two zips that differ in this file. Whitespace-separated switches, plus an optional line `trace=<path>`
+/// whose path runs to the end of the line, so it may contain spaces.
+const SETTINGS_FILE: &str = "slap5-settings.txt";
+
+fn settings_file() -> Option<String> {
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    std::fs::read_to_string(dir.join(SETTINGS_FILE)).ok()
+}
+
+/// Splits the settings file into its trace path, if any, and its switches.
+fn split_settings(text: &str) -> (Option<String>, Vec<String>) {
+    let mut trace = None;
+    let mut switches = Vec::new();
+    for line in text.lines() {
+        // A leading BOM would otherwise stay on the first switch.
+        let line = line.trim_start_matches('\u{feff}').trim();
+        match line.strip_prefix("trace=") {
+            Some(path) => trace = Some(path.trim().to_owned()),
+            None => switches.extend(line.split_whitespace().map(str::to_owned)),
+        }
+    }
+    (trace, switches)
+}
+
 fn main() -> io::Result<()> {
-    let mut trace = std::env::var("SLAP5_TRACE").ok().and_then(|p| Trace::new(&p));
+    let (file_trace, file_switches) = settings_file().map(|t| split_settings(&t)).unwrap_or_default();
+    let mut trace = file_trace.or_else(|| std::env::var("SLAP5_TRACE").ok()).and_then(|p| Trace::new(&p));
     if let Some(t) = trace.as_mut() {
         t.log("info", "engine start");
     }
@@ -48,7 +75,9 @@ fn main() -> io::Result<()> {
     let mut out = io::stdout().lock();
     let mut engine = Engine::new();
     // A typo in a run's switches must not pass silently: it would make the run look like a default run.
-    for flag in flags(std::env::args().skip(1), std::env::var("SLAP5_FLAGS").ok()) {
+    let mut all = flags(std::env::args().skip(1), std::env::var("SLAP5_FLAGS").ok());
+    all.extend(file_switches);
+    for flag in all {
         if engine.configure(&flag) {
             if let Some(t) = trace.as_mut() {
                 t.log("info", &format!("switch {flag}"));
@@ -100,6 +129,21 @@ mod tests {
         );
         assert_eq!(got, vec!["no-threes", "wide=6", "clustered-tt", "aspiration", "no-futility"]);
         assert!(flags(Vec::<String>::new(), None).is_empty());
+    }
+
+    #[test]
+    fn settings_file_gives_a_trace_path_and_switches() {
+        let (trace, switches) = split_settings("clustered-tt cap=8\ntrace=C:\\runs\\a.log\n");
+        assert_eq!(trace.as_deref(), Some("C:\\runs\\a.log"));
+        assert_eq!(switches, vec!["clustered-tt", "cap=8"]);
+        assert_eq!(split_settings(""), (None, Vec::new()));
+    }
+
+    #[test]
+    fn settings_trace_path_keeps_spaces_and_non_ascii() {
+        let (trace, switches) = split_settings("\u{feff}no-time\r\ntrace=C:\\My Projects\\µúï\\a b.log\r\n");
+        assert_eq!(trace.as_deref(), Some("C:\\My Projects\\µúï\\a b.log"));
+        assert_eq!(switches, vec!["no-time"]);
     }
 
     // Every switch the bundle uses has to be one the engine knows. A rejected switch is reported on the

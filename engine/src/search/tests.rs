@@ -435,6 +435,19 @@ fn clustered_tt_cannot_change_an_exact_score() {
     }
 }
 
+#[test]
+fn table_bits_for_and_resize() {
+    assert_eq!(Searcher::table_bits_for(32 << 20), 21);
+    assert_eq!(Searcher::table_bits_for((32 << 20) - 1), 20, "rounds down to a table that fits");
+    assert_eq!(Searcher::table_bits_for(0), MIN_TT_BITS);
+    assert_eq!(Searcher::table_bits_for(u64::MAX), MAX_TT_BITS);
+    let mut s = Searcher::with_table_bits(12);
+    s.resize_table(14);
+    assert_eq!((s.table_bits(), s.tt.len(), s.mask), (14, 1 << 14, (1 << 14) - 1));
+    let b = board(&[(0, 7, 7), (1, 7, 8), (0, 8, 8), (1, 8, 7)]);
+    assert!(s.search(&b, 0, limits(4)).is_some(), "the resized table searches");
+}
+
 // A table smaller than a cluster still has to work: `with_table_bits(0)` and `(1)` allocate one and two
 // entries, and a four-entry bucket on them would index past the vector. A tiny table is useless but it has
 // to be sound, and it is a public constructor.

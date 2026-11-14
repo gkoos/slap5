@@ -6,3 +6,6 @@ logs/
 /web/node_modules
 /web/dist
 /web/src/wasm
+
+# Compiled Python from engine/scripts.
+__pycache__/

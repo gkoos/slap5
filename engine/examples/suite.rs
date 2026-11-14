@@ -14,9 +14,21 @@ fn xy(s: &str) -> (usize, usize) {
 fn main() {
     let mut config = Config::default();
     let mut ms = 1000;
+    let mut tt_bits = None;
+    let mut only = None;
+    let mut after = None;
+    let mut depth = 100;
     for arg in std::env::args().skip(1) {
         if let Ok(n) = arg.parse() {
             ms = n;
+        } else if let Some(b) = arg.strip_prefix("tt-bits=") {
+            tt_bits = Some(b.parse::<u32>().expect("tt-bits=<n>"));
+        } else if let Some(name) = arg.strip_prefix("only=") {
+            only = Some(name.to_owned());
+        } else if let Some(m) = arg.strip_prefix("after=") {
+            after = Some(xy(m));
+        } else if let Some(d) = arg.strip_prefix("depth=") {
+            depth = d.parse().expect("depth=<n>");
         } else if !config.apply(&arg) {
             panic!("unknown argument {arg}");
         }
@@ -28,6 +40,9 @@ fn main() {
     for line in include_str!("last_chance.txt").lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
         let mut parts = line.split_whitespace();
         let name = parts.next().unwrap();
+        if only.as_deref().is_some_and(|o| o != name) {
+            continue;
+        }
         let (mut us, mut played, mut stones, mut saving) = (0, (0, 0), Vec::new(), Vec::new());
         let mut field = "";
         for tok in parts {
@@ -56,9 +71,24 @@ fn main() {
             board.make(p.parse().unwrap(), y, x);
         }
         assert!(!saving.contains(&played), "{name}: the played move is listed as saving");
-        let mut searcher = Searcher::new();
+        let mut searcher = tt_bits.map_or_else(Searcher::new, Searcher::with_table_bits);
         searcher.config = config;
-        let r = searcher.search(&board, us, Limits { time: Duration::from_millis(ms), max_depth: 100 }).unwrap();
+        let limits = Limits { time: Duration::from_millis(ms), max_depth: depth };
+        // `after=x,y`: our move is played first and the search is the opponent's reply, from its side.
+        if let Some((x, y)) = after {
+            board.make(us, y, x);
+            us = 1 - us;
+        }
+        let r = if only.is_some() {
+            let started = std::time::Instant::now();
+            let mut report = |depth: i32, x: usize, y: usize, score: i32| {
+                let verdict = if saving.contains(&(x, y)) { "saving" } else if (x, y) == played { "the game's losing move" } else { "not saving" };
+                println!("  depth {depth:>2} at {:>5} ms -> ({x},{y}) score {score:>6} {verdict}", started.elapsed().as_millis());
+            };
+            searcher.search_observing(&board, us, limits, &mut report).unwrap()
+        } else {
+            searcher.search(&board, us, limits).unwrap()
+        };
         let ok = saving.contains(&(r.x, r.y));
         total += 1;
         saved += ok as u32;

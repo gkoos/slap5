@@ -17,6 +17,10 @@ const MAX_PLY: usize = 256;
 const MATE_BOUND: i32 = MATE - MAX_PLY as i32;
 const NO_MOVE: u8 = 255;
 const DEFAULT_TT_BITS: u32 = 21; // 2^21 entries of 16 bytes = 32 MB
+/// The largest table `table_bits_for` asks for: 2^30 entries, 16 GiB.
+const MAX_TT_BITS: u32 = 30;
+/// The smallest: 2^10 entries, 16 KiB.
+const MIN_TT_BITS: u32 = 10;
 const VCF_NODES: i32 = 20_000;
 /// Depth the one VCF call per move is given, in plies: half of it is exchanges.
 const VCF_ROOT_DEPTH: i32 = 32;
@@ -174,6 +178,11 @@ pub struct Config {
     pub aspiration: bool,
     /// The first aspiration window's half-width in centi-eval units (command line `asp=<n>`).
     pub aspiration_delta: i32,
+    /// Time management (`time`/`no-time`): allocate each move with the reserve-adjusted match clock
+    /// in `engine/src/time.rs` (the reference engines' scheme) instead of the legacy `time_left/10`
+    /// placeholder. **On by default**: the time-management probe held the match clock at +13 s where
+    /// the legacy scheme overran it (min −589 ms on a long game), and never overspent a budget.
+    pub time_management: bool,
 }
 
 impl Default for Config {
@@ -203,6 +212,7 @@ impl Default for Config {
             clustered_tt: true,
             aspiration: false,
             aspiration_delta: 50,
+            time_management: true,
         }
     }
 }
@@ -268,6 +278,8 @@ impl Config {
             "no-clustered-tt" => self.clustered_tt = false,
             "aspiration" => self.aspiration = true,
             "no-aspiration" => self.aspiration = false,
+            "time" => self.time_management = true,
+            "no-time" => self.time_management = false,
             _ => return false,
         }
         true
@@ -300,6 +312,12 @@ pub struct Stats {
     pub first_move_cutoffs: u64,
     /// Moves skipped by the move-count limit.
     pub pruned: u64,
+    /// Table lookups, and how many found their own key.
+    pub tt_probes: u64,
+    pub tt_hits: u64,
+    /// Table stores, and how many of them replaced another position stored during this same search.
+    pub tt_stores: u64,
+    pub tt_evictions: u64,
     /// Interior nodes (not the root) by [forced][tactical][cut][depth, capped at 8].
     pub width: [[[[Width; 9]; 2]; 2]; 2],
 }
@@ -589,6 +607,28 @@ impl Searcher {
         }
     }
 
+    /// The bits of the largest table that fits in `bytes`. The table is a power of two because the bucket
+    /// index is a mask.
+    pub fn table_bits_for(bytes: u64) -> u32 {
+        let entries = bytes / std::mem::size_of::<Entry>() as u64;
+        (63u32.saturating_sub(entries.max(1).leading_zeros())).clamp(MIN_TT_BITS, MAX_TT_BITS)
+    }
+
+    pub fn table_bits(&self) -> u32 {
+        self.tt.len().trailing_zeros()
+    }
+
+    /// Replaces the table with an empty one of `1 << bits` entries; nothing else is reset.
+    pub fn resize_table(&mut self, bits: u32) {
+        if self.table_bits() == bits {
+            return;
+        }
+        // Freed before the new one is allocated, so peak memory is not the two tables together.
+        self.tt = Vec::new();
+        self.tt = vec![Entry::default(); 1 << bits];
+        self.mask = (1 << bits) - 1;
+    }
+
     /// Records the moves the game has played, so the root's ordering can read them. The last four, in
     /// oldest-first order, which is the window `recent_at` uses at the root.
     fn set_root_recent(&mut self, played: &[u8]) {
@@ -761,16 +801,18 @@ impl Searcher {
     }
 
     /// A stored score that settles the node, and the stored best move (`NO_MOVE` if none).
-    fn probe_tt(&self, key: u64, depth: i32, alpha: i32, beta: i32, ply: usize) -> (Option<i32>, u8) {
+    fn probe_tt(&mut self, key: u64, depth: i32, alpha: i32, beta: i32, ply: usize) -> (Option<i32>, u8) {
         if !self.config.use_tt {
             return (None, NO_MOVE);
         }
+        self.stats.tt_probes += 1;
         let (base, n) = self.bucket(key);
         for i in base..base + n {
             let e = self.tt[i];
             if e.bound == 0 || e.key != key {
                 continue;
             }
+            self.stats.tt_hits += 1;
             let s = from_tt(e.score as i32, ply);
             let settles = e.depth as i32 >= depth
                 && match e.bound {
@@ -837,6 +879,10 @@ impl Searcher {
             target
         };
         let slot = self.tt[target];
+        self.stats.tt_stores += 1;
+        if slot.bound != 0 && slot.key != key && slot.age == age {
+            self.stats.tt_evictions += 1;
+        }
         let mv = if mv == NO_MOVE && slot.key == key { slot.mv } else { mv };
         self.tt[target] = Entry { key, score: to_tt(score, ply) as i16, mv, depth: depth as i8, bound, age };
     }
