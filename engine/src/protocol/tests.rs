@@ -4,6 +4,14 @@ fn run(e: &mut Engine, lines: &[&str]) -> Vec<String> {
     lines.iter().flat_map(|l| e.handle(l)).collect()
 }
 
+#[test]
+fn preparation_time_comes_out_of_the_budget() {
+    let ms = Duration::from_millis;
+    assert_eq!(after_preparation(ms(950), ms(80)), ms(870));
+    assert_eq!(after_preparation(ms(950), ms(0)), ms(950));
+    assert_eq!(after_preparation(ms(60), ms(80)), ms(20));
+}
+
 fn last(lines: &[String]) -> &str {
     lines.last().expect("a reply")
 }

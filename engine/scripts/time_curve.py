@@ -31,18 +31,31 @@ def phase_of(stones):
     return None
 
 
+def pair_openings(run):
+    """Line of the openings file each pair of a run was played from, as the run's run-info.txt records it."""
+    path = os.path.join(run, "run-info.txt")
+    if not os.path.exists(path):
+        raise SystemExit(f"{run}: no run-info.txt, so its pair numbers cannot be mapped to openings")
+    for line in open(path):
+        m = re.match(r"pairs: \d+; openings: ([\d,]+)\s*$", line)
+        if m:
+            return [int(i) for i in m.group(1).split(",")]
+    raise SystemExit(f"{path}: no `pairs: N; openings: ...` line")
+
+
 def sample(openings_file, out, per_phase, runs):
     stones_per_opening = [len([t for t in l.split(",") if t.strip()]) // 2
                           for l in open(openings_file) if l.strip()]
     found = {name: [] for name, _, _ in PHASES}
     seen = set()
     for run in runs:
+        mapping = pair_openings(run)
         for name in sorted(os.listdir(run)):
             m = re.match(r"p(\d\d)_(slap5|opponent)_first\.psq$", name)
             if not m:
                 continue
             ours = 0 if m.group(2) == "slap5" else 1
-            opening = stones_per_opening[int(m.group(1)) % len(stones_per_opening)]
+            opening = stones_per_opening[mapping[int(m.group(1))]]
             moves = []
             for line in open(os.path.join(run, name)):
                 p = line.strip().split(",")
@@ -159,6 +172,9 @@ def analyse(positions, rapfi_moves, curve):
             continue
         cells = [100.0 * sum(move_at(i, b) == ref[i] for i in sel) / len(sel) for b in BUDGETS_MS]
         print(f"{ph:<8} {len(sel):>4} " + " ".join(f"{c:>6.1f}%" for c in cells))
+    differ = sum(move_at(i, BUDGETS_MS[0]) != move_at(i, BUDGETS_MS[-1]) for i in ids)
+    print(f"the move at {BUDGETS_MS[0] / 1000:g} s differs from the move at {BUDGETS_MS[-1] / 1000:g} s in "
+          f"{100.0 * differ / len(ids):.1f}% of {len(ids)} positions")
     print()
     print("move changes after it has been stable: of iterations whose move equalled the previous k-1 iterations'")
     print("moves, how often the last iteration completed within 30 s plays a different move")

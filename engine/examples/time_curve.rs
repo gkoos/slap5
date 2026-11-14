@@ -6,6 +6,7 @@
 //! each line flushed as it is written so a running measurement can be read.
 
 use slap5::Board;
+use slap5::bitboard::cell;
 use slap5::search::{Limits, Searcher};
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -19,9 +20,12 @@ fn main() {
         let p: Vec<&str> = line.split_whitespace().collect();
         let (id, side): (usize, usize) = (p[0].parse().unwrap(), p[3].parse().unwrap());
         let mut board = Board::new();
+        let mut played: Vec<u8> = Vec::new();
         for (k, m) in p[4..].iter().enumerate() {
             let (x, y) = m.split_once(',').unwrap();
-            board.make(k % 2, y.parse().unwrap(), x.parse().unwrap());
+            let (x, y): (usize, usize) = (x.parse().unwrap(), y.parse().unwrap());
+            board.make(k % 2, y, x);
+            played.push(cell(x, y) as u8);
         }
         let mut searcher = Searcher::new();
         let started = Instant::now();
@@ -30,7 +34,7 @@ fn main() {
             lines.push(format!("{id} iter {depth} {} {x},{y} {score}", started.elapsed().as_millis()));
         };
         let limits = Limits { time: Duration::from_millis(ms), max_depth: 100 };
-        let r = searcher.search_observing(&board, side, limits, &mut report).unwrap();
+        let r = searcher.search_with_observing(&board, side, limits, &played, &mut report).unwrap();
         lines.push(format!("{id} final {} {},{} {} {}", r.elapsed.as_millis(), r.x, r.y, r.score, r.depth));
         // Written after the search, so file I/O never lands inside the timed iterations.
         for l in lines {

@@ -1,4 +1,5 @@
 use crate::bitboard::{cell, SIZE};
+use crate::clock::Instant;
 use crate::game::Game;
 use crate::search::{Limits, Searcher};
 use crate::time;
@@ -23,6 +24,12 @@ pub struct Engine {
 /// Memory kept out of the table for everything else the process holds, measured at about 1 MiB of USS.
 /// Gomocup measures the engine's USS after every move and counts going over `max_memory` as a crash.
 const RESERVE_BYTES: u64 = 16 << 20;
+
+/// The budget less what the reply spent before the search started (the first reply's table allocation),
+/// never below the 20 ms floor `time::budget` keeps.
+fn after_preparation(budget: Duration, spent: Duration) -> Duration {
+    budget.saturating_sub(spent).max(Duration::from_millis(20))
+}
 
 fn parse_xy(s: &str) -> Option<(usize, usize)> {
     let (x, y) = s.split_once(',')?;
@@ -134,6 +141,7 @@ impl Engine {
     }
 
     fn reply_move(&mut self) -> Vec<String> {
+        let entered = Instant::now();
         if let Some(bits) = self.wanted_table_bits() {
             self.searcher.resize_table(bits);
         }
@@ -145,6 +153,7 @@ impl Engine {
         } else {
             legacy_budget(self.timeout_turn, self.time_left)
         };
+        let time = after_preparation(time, entered.elapsed());
         let limits = Limits { time, max_depth: 100 };
         // The moves the game really played, which the root's ordering reads for proximity: without them
         // the searcher's root has no last move at all, because the search path starts empty there

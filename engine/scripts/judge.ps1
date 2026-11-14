@@ -58,7 +58,8 @@ $trace = Join-Path $run 'slap5-trace.log'
 $stage = Join-Path $run 'slap5-package'
 New-Item -ItemType Directory -Force $stage | Out-Null
 Copy-Item $engine $stage
-"$Flags trace=$trace".Trim() | Set-Content -Encoding ASCII (Join-Path $stage 'slap5-settings.txt')
+# UTF-8 without a BOM, as Rust reads it; the trace path is on its own line because it may contain spaces.
+[IO.File]::WriteAllLines((Join-Path $stage 'slap5-settings.txt'), @(@($Flags.Trim(), "trace=$trace") | Where-Object { $_ }), (New-Object Text.UTF8Encoding $false))
 $zip = Join-Path $server 'engine\slap5.zip'
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip
 $engineFiles = @('slap5.zip')
@@ -117,17 +118,23 @@ function Export-MatchLayout {
     if (-not (Test-Path $statePath)) { return }
     $stoneCounts = @($lines | ForEach-Object { [int](@($_ -split ',' | Where-Object { $_.Trim() }).Count / 2) })
 
-    # The engine's own moves and log lines per process; the Judge starts one process per game.
+    # The engine's own moves and log lines per process; the Judge starts one process per game. A pid can be
+    # reused within a run, so every `engine start` line opens a new entry.
     $byPid = @{}
+    $current = @{}
     if (Test-Path $trace) {
         foreach ($l in Get-Content $trace) {
             if ($l -notmatch '^\d+ pid=(\d+) (recv|sent|info) (.*)$') { continue }
             $id, $dir, $text = $Matches[1], $Matches[2], $Matches[3]
-            if (-not $byPid.ContainsKey($id)) { $byPid[$id] = @{ moves = @(); log = @() } }
-            if ($dir -eq 'recv' -and $text -like 'START*') { $byPid[$id].log += $text }
-            elseif ($dir -eq 'sent' -and $text -like 'DEBUG*') { $byPid[$id].log += $text }
+            if (($dir -eq 'info' -and $text -eq 'engine start') -or -not $current.ContainsKey($id)) {
+                $current[$id] = "$id#$($byPid.Count)"
+                $byPid[$current[$id]] = @{ moves = @(); log = @() }
+            }
+            $entry = $byPid[$current[$id]]
+            if ($dir -eq 'recv' -and $text -like 'START*') { $entry.log += $text }
+            elseif ($dir -eq 'sent' -and $text -like 'DEBUG*') { $entry.log += $text }
             elseif ($dir -eq 'sent' -and $text -match '^(\d+),(\d+)$') {
-                $byPid[$id].moves += '{0},{1}' -f ([int]$Matches[1] + 1), ([int]$Matches[2] + 1)
+                $entry.moves += '{0},{1}' -f ([int]$Matches[1] + 1), ([int]$Matches[2] + 1)
             }
         }
     }
@@ -154,15 +161,35 @@ function Export-MatchLayout {
         }
     }
 
-    # A process's moves identify its game: the record's moves for our side, or a prefix of them when the last
-    # move was cut off by the clock.
+    # A process's moves identify its game: all of the record's moves for our side, or those with one move more
+    # or fewer where the clock cut the last one off. A game takes a log only when exactly one process fits it
+    # best and no other game fits that process; otherwise it gets none, as repeated openings can replay a game.
+    $fit = {
+        param($a, $b)
+        $a, $b = @($a), @($b)
+        $n = [Math]::Min($a.Count, $b.Count)
+        if ($n -lt 1 -or [Math]::Abs($a.Count - $b.Count) -gt 1) { return -1 }
+        if (($a[0..($n - 1)] -join ' ') -ne ($b[0..($n - 1)] -join ' ')) { return -1 }
+        [int]($a.Count -ne $b.Count)
+    }
+    $assigned = @{}
+    $claims = @{}
+    foreach ($g in $games) {
+        $ranked = @(foreach ($key in $byPid.Keys) {
+            $r = & $fit $byPid[$key].moves $g.Ours
+            if ($r -ge 0) { [pscustomobject]@{ Key = $key; Rank = $r } }
+        })
+        if ($ranked.Count -eq 0) { continue }
+        $top = ($ranked | Measure-Object Rank -Minimum).Minimum
+        $keys = @($ranked | Where-Object Rank -eq $top | ForEach-Object Key)
+        if ($keys.Count -ne 1) { continue }
+        $assigned[$g.Psq] = $keys[0]
+        $claims[$keys[0]] = 1 + [int]$claims[$keys[0]]
+    }
     $logFor = {
         param($g)
-        foreach ($entry in $byPid.Values) {
-            $a, $b = $entry.moves, $g.Ours
-            $n = [Math]::Min($a.Count, $b.Count)
-            if ($n -ge 1 -and (@($a)[0..($n - 1)] -join ' ') -eq (@($b)[0..($n - 1)] -join ' ')) { return $entry.log }
-        }
+        $key = $assigned[$g.Psq]
+        if ($key -and $claims[$key] -eq 1) { return $byPid[$key].log }
         @('START 15')
     }
 
@@ -209,7 +236,7 @@ try {
     }
     for ($i = 0; $i -lt $Clients; $i++) {
         $dir = Join-Path $run "client$i"
-        $c = Start-Process $Python -ArgumentList '-u', (Join-Path $Judge 'client\client.py'), '--host', 'localhost', '--port', $Port, '--dir', $dir `
+        $c = Start-Process $Python -ArgumentList '-u', "`"$(Join-Path $Judge 'client\client.py')`"", '--host', 'localhost', '--port', $Port, '--dir', "`"$dir`"" `
             -RedirectStandardOutput (Join-Path $run "client$i-out.txt") -RedirectStandardError (Join-Path $run "client$i-err.txt") `
             -WindowStyle Hidden -PassThru
         # Engines inherit the client's affinity, so both players of a game share one core, as at Gomocup.

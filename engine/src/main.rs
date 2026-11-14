@@ -41,7 +41,8 @@ fn flags<I: IntoIterator<Item = String>>(args: I, env: Option<String>) -> Vec<St
 
 /// The file next to the executable that carries a build's settings when the environment cannot: GomocupJudge
 /// starts every engine with its own environment and tells engines apart by checksum, so two arms of an A/B
-/// are two zips that differ in this file. Whitespace-separated switches, plus an optional `trace=<path>`.
+/// are two zips that differ in this file. Whitespace-separated switches, plus an optional line `trace=<path>`
+/// whose path runs to the end of the line, so it may contain spaces.
 const SETTINGS_FILE: &str = "slap5-settings.txt";
 
 fn settings_file() -> Option<String> {
@@ -53,10 +54,12 @@ fn settings_file() -> Option<String> {
 fn split_settings(text: &str) -> (Option<String>, Vec<String>) {
     let mut trace = None;
     let mut switches = Vec::new();
-    for token in text.split_whitespace() {
-        match token.strip_prefix("trace=") {
-            Some(path) => trace = Some(path.to_owned()),
-            None => switches.push(token.to_owned()),
+    for line in text.lines() {
+        // A leading BOM would otherwise stay on the first switch.
+        let line = line.trim_start_matches('\u{feff}').trim();
+        match line.strip_prefix("trace=") {
+            Some(path) => trace = Some(path.trim().to_owned()),
+            None => switches.extend(line.split_whitespace().map(str::to_owned)),
         }
     }
     (trace, switches)
@@ -130,10 +133,17 @@ mod tests {
 
     #[test]
     fn settings_file_gives_a_trace_path_and_switches() {
-        let (trace, switches) = split_settings("clustered-tt\ntrace=C:\\runs\\a.log  cap=8\n");
+        let (trace, switches) = split_settings("clustered-tt cap=8\ntrace=C:\\runs\\a.log\n");
         assert_eq!(trace.as_deref(), Some("C:\\runs\\a.log"));
         assert_eq!(switches, vec!["clustered-tt", "cap=8"]);
         assert_eq!(split_settings(""), (None, Vec::new()));
+    }
+
+    #[test]
+    fn settings_trace_path_keeps_spaces_and_non_ascii() {
+        let (trace, switches) = split_settings("\u{feff}no-time\r\ntrace=C:\\My Projects\\µúï\\a b.log\r\n");
+        assert_eq!(trace.as_deref(), Some("C:\\My Projects\\µúï\\a b.log"));
+        assert_eq!(switches, vec!["no-time"]);
     }
 
     // Every switch the bundle uses has to be one the engine knows. A rejected switch is reported on the
